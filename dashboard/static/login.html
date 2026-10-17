@@ -137,7 +137,9 @@
     <div class="logo"><em>J</em>ARVIS</div>
     <div class="sub">Remote Access</div>
     <p id="reconnecting">Reconnecting…</p>
-    <p class="hint">Press <strong style="color:var(--text)">Remote Control</strong> in the JARVIS desktop app to get a QR code or session key.</p>
+    <p class="hint">Ask the server operator for a fresh pairing link or session key.
+      On the server, from the JARVIS checkout using its Python environment, run
+      <code>python -m core.headless pair</code>.</p>
     <div class="key-wrap">
       <input class="key-input" id="key" type="text" maxlength="6"
              autocomplete="off" autocorrect="off" spellcheck="false"
@@ -145,36 +147,126 @@
     </div>
     <div class="err" id="err"></div>
     <button class="btn" onclick="doLogin()">CONNECT</button>
+    <button class="btn" id="retry-device" style="display:none;margin-top:10px"
+            onclick="_retryDurableLogin()">RETRY DEVICE</button>
     <p class="voice-note">
-      🎤 <strong style="color:var(--text)">Voice commands:</strong> open
-      <code>chrome://flags</code> on your phone, search
-      <code>Insecure origins treated as secure</code>, add your JARVIS URL, tap Relaunch.
+      🎤 <strong style="color:var(--text)">Voice commands:</strong> open the trusted
+      private HTTPS link in Safari while connected to the private network/Tailscale.
+      Tap the microphone button and allow microphone access. If denied, check
+      Safari's website microphone permissions, then tap again. Do not bypass
+      certificate warnings or browser security protections.
     </p>
   </div>
 
   <script>
-    // Try auto-reconnect with stored device token (set on first QR login)
-    (async function() {
-      const devTok = localStorage.getItem('jarvis_device_token');
-      if (!devTok) return;
+    const DURABLE_KEY = 'jarvis_device_credential';
+    let _pendingDurable = null;
+    let _durableAttemptActive = false;
+
+    function _consumeFragment() {
+      const hash = location.hash;
+      if (!hash) return { present: false, credential: null };
+      history.replaceState(null, '', '/login');
+      const match = hash.match(/^#device=([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/);
+      if (!match) return { present: true, credential: null };
+      return {
+        present: true,
+        credential: {
+          opaque: match[1] + '.' + match[2],
+          device_id: match[1],
+          secret: match[2],
+        },
+      };
+    }
+
+    function _parseStoredCredential(value) {
+      const match = value && value.match(/^([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/);
+      if (!match) return null;
+      return { opaque: value, device_id: match[1], secret: match[2] };
+    }
+
+    function _showReconnecting() {
       document.getElementById('reconnecting').style.display = 'block';
+    }
+
+    function _hideReconnecting() {
+      document.getElementById('reconnecting').style.display = 'none';
+    }
+
+    function _showDurableRetry() {
+      _hideReconnecting();
+      document.getElementById('err').textContent = 'Unable to reconnect. Try again.';
+      document.getElementById('retry-device').style.display = 'block';
+    }
+
+    async function _exchange(credential) {
       try {
-        const r = await fetch('/api/device-login', {
+        const response = await fetch('/api/device-login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_token: devTok }),
+          body: JSON.stringify({
+            device_id: credential.device_id,
+            secret: credential.secret,
+          }),
         });
-        const d = await r.json();
-        if (d.ok && d.token) {
-          sessionStorage.setItem('jarvis_key', d.key);
-          sessionStorage.setItem('jarvis_token', d.token);
-          location.replace('/');
-          return;
-        }
-      } catch (_) {}
-      // Device token rejected (server restarted) — clear it and show normal form
-      localStorage.removeItem('jarvis_device_token');
-      document.getElementById('reconnecting').style.display = 'none';
+        if (response.status === 401) return { state: 'revoked' };
+        if (response.status === 429) return { state: 'retry' };
+        if (!response.ok) return { state: 'retry' };
+        const data = await response.json();
+        if (!data.ok || !data.token || !data.key) return { state: 'retry' };
+        return { state: 'success', token: data.token, key: data.key };
+      } catch (_) {
+        return { state: 'retry' };
+      }
+    }
+
+    async function _attemptDurableLogin(credential) {
+      if (!credential || _durableAttemptActive) return;
+      _pendingDurable = credential;
+      _durableAttemptActive = true;
+      document.getElementById('retry-device').style.display = 'none';
+      document.getElementById('err').textContent = '';
+      _showReconnecting();
+      const result = await _exchange(credential);
+      _durableAttemptActive = false;
+      if (result.state === 'success') {
+        sessionStorage.setItem('jarvis_key', result.key);
+        sessionStorage.setItem('jarvis_token', result.token);
+        location.replace('/');
+        return;
+      }
+      if (result.state === 'revoked') {
+        localStorage.removeItem(DURABLE_KEY);
+        _pendingDurable = null;
+        _hideReconnecting();
+        document.getElementById('retry-device').style.display = 'none';
+        document.getElementById('err').textContent = 'Invalid or revoked device';
+        return;
+      }
+      _showDurableRetry();
+    }
+
+    function _retryDurableLogin() {
+      return _attemptDurableLogin(_pendingDurable);
+    }
+
+    (async function() {
+      const fragment = _consumeFragment();
+      if (fragment.present) {
+        if (!fragment.credential) return;
+        localStorage.setItem(DURABLE_KEY, fragment.credential.opaque);
+        await _attemptDurableLogin(fragment.credential);
+        return;
+      }
+
+      const stored = localStorage.getItem(DURABLE_KEY);
+      if (!stored) return;
+      const credential = _parseStoredCredential(stored);
+      if (!credential) {
+        localStorage.removeItem(DURABLE_KEY);
+        return;
+      }
+      await _attemptDurableLogin(credential);
     })();
 
     const inp = document.getElementById('key');
@@ -201,10 +293,11 @@
         document.getElementById('err').textContent = 'Connection error';
         shake(); return;
       }
-      if (data.ok && data.token) {
-        sessionStorage.setItem('jarvis_key', key);
+      if (data.ok && typeof data.token === 'string' && data.token &&
+          typeof data.key === 'string' && data.key) {
+        sessionStorage.setItem('jarvis_key', data.key);
         sessionStorage.setItem('jarvis_token', data.token);
-        location.href = '/';
+        location.replace('/');
       } else {
         inp.value = '';
         inp.focus();

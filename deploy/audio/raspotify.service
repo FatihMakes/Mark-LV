@@ -1,0 +1,19 @@
+# User service, same account/audio session as JARVIS. Never restart for ducking.
+[Unit]
+Description=LaCasa Spotify Connect on shared PipeWire audio
+After=pipewire-pulse.service wireplumber.service
+Requires=pipewire-pulse.service
+
+[Service]
+Type=simple
+Environment=PULSE_SERVER=unix:%t/pulse/native
+Environment=PULSE_SINK=lacasa_spotify
+ExecStartPre=/usr/bin/python3 %h/Mark-LV-LaCasa/deploy/audio/ensure-routes.py
+ExecStart=/usr/bin/librespot --name "raspotify (lacasa-server)" --backend pulseaudio --device lacasa_spotify --mixer softvol --cache %h/.cache/raspotify --system-cache %h/.local/state/raspotify --zeroconf-port 38145
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target

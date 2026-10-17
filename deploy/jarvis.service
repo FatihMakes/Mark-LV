@@ -1,0 +1,40 @@
+# Install as ~/.config/systemd/user/jarvis.service for user lacasa.
+# Requires trusted private HTTPS reverse proxy to 127.0.0.1:8000.
+[Unit]
+Description=LaCasa headless JARVIS voice assistant (with pinned local Cannanas MCP adapter child)
+After=network-online.target pipewire-pulse.service
+Wants=network-online.target pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Mark-LV-LaCasa
+ExecStart=%h/Mark-LV-LaCasa/.venv/bin/python main.py
+# Cannanas: the pinned local adapter child launches from JARVIS; its dedicated
+# least-privilege credentials ride in this mode-0600 EnvironmentFile (never the
+# Hermes key, never in Git). Missing or invalid credentials degrade Cannanas
+# only — JARVIS, Spotify and Home Assistant keep running.
+EnvironmentFile=%h/Mark-LV-LaCasa/deploy/cannanas/cannanas-adapter.credentials
+# Adapter child paths (not secrets; the credentials file keeps only the four
+# adapter variables because the installer refuses extra variables there).
+Environment=JARVIS_CANNANAS_ADAPTER_COMMAND=%h/cannanas-adapter/venv/bin/cannanas-mcp-adapter
+Environment=JARVIS_CANNANAS_AUDIT_FILE=%h/cannanas-adapter/audit/jarvis-write-audit.jsonl
+Environment=JARVIS_HEADLESS=true
+Environment=JARVIS_CAPTURE_SOURCE=phone
+Environment=JARVIS_BIND=127.0.0.1
+Environment=JARVIS_PUBLIC_URL=https://lacasa-server.tail7a9c2.ts.net
+Environment=JARVIS_DEVICE_CREDENTIALS=%h/Mark-LV-LaCasa/config/device_credentials.json
+Environment=JARVIS_DEVICE_QR_DIR=%h/Mark-LV-LaCasa/config/device_qr
+Environment=PYTHONUNBUFFERED=1
+Environment=PULSE_SERVER=unix:%t/pulse/native
+RuntimeDirectory=jarvis
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+# EX_CONFIG: invalid/missing credentials or configuration require local repair.
+# Ordinary listener/startup failures remain retryable under Restart=on-failure.
+RestartPreventExitStatus=78
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

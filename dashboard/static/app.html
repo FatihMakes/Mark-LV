@@ -148,6 +148,7 @@
     <label class="btn-attach" for="file-inp" title="Send file">📎</label>
     <input type="file" id="file-inp" multiple accept="*/*" style="display:none">
     <button id="mic-btn" onclick="doMic()" title="Voice command">🎤</button>
+    <button class="btn btn-send" id="stop-btn" onclick="doStop()">STOP</button>
     <button class="btn btn-wake" id="wake" onclick="doWake()">WAKE</button>
     <button class="btn btn-send" onclick="doSend()">SEND</button>
   </footer>
@@ -161,10 +162,121 @@
       location.replace('/login');
     }
 
-    function _authHeader() { return { 'Authorization': `Bearer ${_authToken}` }; }
-    function _authFetch(url, opts = {}) {
-      opts.headers = Object.assign({}, opts.headers, _authHeader());
-      return fetch(url, opts);
+    let _recoveryTimer = null;
+    let _recoveryWaitResolve = null;
+    let _recoveryProbeTimer = null;
+    let _recoveryProbeAbort = null;
+    let _recoveryActive = false;
+    let _loginRouted = false;
+    let _leavingPage = false;
+
+    function _cancelRecoveryTimer() {
+      if (_recoveryTimer !== null) {
+        clearTimeout(_recoveryTimer);
+        _recoveryTimer = null;
+      }
+      if (_recoveryWaitResolve) {
+        const resolve = _recoveryWaitResolve;
+        _recoveryWaitResolve = null;
+        resolve(false);
+      }
+      if (_recoveryProbeTimer !== null) {
+        clearTimeout(_recoveryProbeTimer);
+        _recoveryProbeTimer = null;
+      }
+      if (_recoveryProbeAbort) {
+        _recoveryProbeAbort.abort();
+        _recoveryProbeAbort = null;
+      }
+    }
+
+    function _waitForRecovery(delay) {
+      return new Promise(resolve => {
+        _recoveryWaitResolve = resolve;
+        _recoveryTimer = setTimeout(() => {
+          _recoveryTimer = null;
+          _recoveryWaitResolve = null;
+          resolve(true);
+        }, delay);
+      });
+    }
+
+    function _clearSessionAuth() {
+      sessionStorage.removeItem('jarvis_token');
+      sessionStorage.removeItem('jarvis_key');
+    }
+
+    function _routeToLogin() {
+      if (_loginRouted) return;
+      _loginRouted = true;
+      _leavingPage = true;
+      _cancelRecoveryTimer();
+      _clearSessionAuth();
+      _recoveryActive = true;
+      _stopVoice();
+      _captureAllowed = false;
+      document.getElementById('mic-btn').disabled = true;
+      location.replace('/login');
+    }
+
+    async function _authFetch(url, opts = {}) {
+      opts.headers = Object.assign({}, opts.headers, { Authorization: 'Bearer ' + _authToken });
+      const response = await fetch(url, opts);
+      if (response.status === 401) _routeToLogin();
+      return response;
+    }
+
+    async function _recoveryStatusProbe(deadline) {
+      const remaining = Math.max(0, deadline - Date.now());
+      if (remaining === 0) throw new Error('recovery deadline reached');
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      _recoveryProbeAbort = controller;
+      const opts = { headers: { Authorization: 'Bearer ' + _authToken } };
+      if (controller) opts.signal = controller.signal;
+      const timeout = new Promise((_, reject) => {
+        _recoveryProbeTimer = setTimeout(() => {
+          _recoveryProbeTimer = null;
+          if (controller) controller.abort();
+          reject(new Error('recovery probe timed out'));
+        }, Math.min(5000, remaining));
+      });
+      try {
+        return await Promise.race([fetch('/api/status', opts), timeout]);
+      } finally {
+        if (_recoveryProbeTimer !== null) clearTimeout(_recoveryProbeTimer);
+        _recoveryProbeTimer = null;
+        if (_recoveryProbeAbort === controller) _recoveryProbeAbort = null;
+      }
+    }
+
+    async function _recoverControlSession() {
+      if (_recoveryActive || _leavingPage) return;
+      _recoveryActive = true;
+      _stopVoice();
+      _captureAllowed = false;
+      document.getElementById('mic-btn').disabled = true;
+      let delay = 1000;
+      const deadline = Date.now() + 15000;
+      while (!_leavingPage && Date.now() < deadline) {
+        try {
+          const response = await _recoveryStatusProbe(deadline);
+          if (_leavingPage) return;
+          if (response.status === 200) {
+            _leavingPage = true;
+            _cancelRecoveryTimer();
+            location.reload();
+            return;
+          }
+          if (response.status === 401) {
+            _routeToLogin();
+            return;
+          }
+        } catch (_) {}
+        if (_leavingPage) return;
+        if (!await _waitForRecovery(delay)) return;
+        delay = Math.min(delay * 2, 5000);
+      }
+      if (!_leavingPage) _routeToLogin();
     }
 
     // ── AES-256-CBC encryption (CryptoJS) ────────────────────────────────────
@@ -211,18 +323,32 @@
     const ws       = new WebSocket(_wsUrl);
 
     ws.onopen    = () => { sys('Remote session active.'); toast('Connected to JARVIS'); };
-    ws.onclose   = () => sys('Connection lost — refresh to reconnect.');
-    ws.onerror   = () => sys('Connection error.');
+    ws.onclose   = (event) => {
+      if (_voiceWs) _stopVoice();
+      if (event && event.code === 4001) _routeToLogin();
+      else _recoverControlSession();
+    };
+    ws.onerror   = () => { if (_voiceWs) _stopVoice(); if (!_recoveryActive) _recoverControlSession(); };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'log')           append(m.speaker, m.text);
-      if (m.type === 'status')        setStatus(m.state);
+      if (m.type === 'status')        setStatus(m);
       if (m.type === 'wake')          sys('Wake word detected — connecting…');
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
     };
 
-    function setStatus(s) {
+    function setStatus(m) {
+      const s = m.state;
+      _captureAllowed = m.audio_allowed === true && !_recoveryActive;
+      micBtn.disabled = !_captureAllowed;
+      if (!_captureAllowed) {
+        if (_voiceWs || _micStarting) _micAutoResume = true;
+        _stopVoice(false, false);
+      } else if (_micAutoResume && !_voiceWs && !_micStarting) {
+        _micAutoResume = false; // consume this gate edge before reacquiring
+        doMic(true);
+      }
       if (s === 'active') {
         pill.className = 'pill on'; stTxt.textContent = 'Active'; wake.classList.remove('show');
       } else {
@@ -324,6 +450,8 @@
           if (meta) meta.insertAdjacentHTML('beforeend',
             `<a class="fc-dl" href="${dlUrl}" download="${esc(savedName)}">⬇ Download back</a>`);
           toast('File sent!');
+        } else if (xhr.status === 401) {
+          _routeToLogin();
         } else {
           let errMsg = 'Upload failed';
           try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch {}
@@ -411,6 +539,12 @@
     let _audioCtx = null;
     let _micStm   = null;
     let _audioNd  = null;
+    let _captureAllowed = false;
+    let _micAttempt = 0;
+    let _micStarting = false;
+    let _micAutoResume = false;
+    let _flushMic = null;
+    micBtn.disabled = true;
 
     function _micIdle() {
       micBtn.innerHTML = '🎤';
@@ -435,38 +569,28 @@
     }
 
     function _showVoiceSetup() {
-      if (document.getElementById('voice-setup')) return; // show once
-      const origin = location.origin;
-      const card = document.createElement('div');
-      card.id = 'voice-setup';
-      card.style.cssText = [
-        'align-self:stretch', 'background:rgba(99,102,241,0.07)',
-        'border:1px solid rgba(99,102,241,0.22)', 'border-radius:14px',
-        'padding:16px 18px', 'font-size:13px', 'line-height:1.8',
-        'animation:pop 0.18s ease'
-      ].join(';');
-      card.innerHTML =
-        '<div style="font-weight:700;color:#818cf8;letter-spacing:.5px;margin-bottom:10px">🎤 One-time voice setup</div>' +
-        '<ol style="padding-left:18px;color:#8899aa;margin:0;display:flex;flex-direction:column;gap:4px">' +
-        '<li>Open a new tab → go to <span style="background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:4px;font-family:monospace;font-size:12px">chrome://flags</span></li>' +
-        '<li>Search: <strong style="color:#dde3ed">Insecure origins treated as secure</strong></li>' +
-        '<li>Paste this URL into the box:<br><span id="flags-url" style="background:rgba(255,255,255,0.07);padding:2px 8px;border-radius:4px;font-family:monospace;font-size:11px;user-select:all;cursor:pointer">' + esc(origin) + '</span></li>' +
-        '<li>Set to <strong style="color:#22c55e">Enabled</strong> → tap <strong style="color:#dde3ed">Relaunch</strong></li>' +
-        '<li>Return here and tap 🎤</li>' +
-        '</ol>';
-      feed.appendChild(card);
-      feed.scrollTop = feed.scrollHeight;
-      // tap to copy
-      card.querySelector('#flags-url').addEventListener('click', () => {
-        navigator.clipboard?.writeText(origin).then(() => toast('URL copied!')).catch(() => {});
-      });
+      sys('Microphone requires Safari microphone permission and trusted HTTPS. Open the private server HTTPS link; do not bypass browser security.');
     }
 
-    async function doMic() {
-      if (_voiceWs) { _stopVoice(); return; }
+    function _showManualResume() {
+      sys('Microphone paused — tap microphone to continue.');
+    }
+
+    async function doMic(automatic = false) {
+      if (_recoveryActive || _leavingPage) return;
+      if (_voiceWs || _micStarting) {
+        if (!automatic) _stopVoice(true);
+        return;
+      }
+      if (!_captureAllowed) { sys('Microphone locked during speech, tail or reconnect.'); return; }
+      _micAutoResume = false;
+      const attempt = ++_micAttempt;
+      _micStarting = true;
 
       if (!navigator.mediaDevices?.getUserMedia) {
         _showVoiceSetup();
+        _micStarting = false;
+        if (automatic) _showManualResume();
         return;
       }
       let stream;
@@ -475,25 +599,40 @@
           audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
         });
       } catch (e) {
+        if (attempt !== _micAttempt) return;
+        _micStarting = false;
+        _micAutoResume = false;
         sys(e.name === 'NotAllowedError'
           ? 'Microphone denied — tap the address bar lock and allow microphone.'
           : 'Mic error: ' + e.message);
+        if (automatic) _showManualResume();
         return;
       }
+      if (attempt !== _micAttempt || !_captureAllowed) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      _micStm = stream;
 
       // 16 kHz context (fall back to native rate — _f32toPcm16 resamples)
       let ctx;
+      try {
       try { ctx = new AudioContext({ sampleRate: 16000 }); }
       catch (_) { ctx = new AudioContext(); }
+      _audioCtx = ctx;
       if (ctx.state === 'suspended') await ctx.resume();
+      if (attempt !== _micAttempt || !_captureAllowed) { _stopVoice(false, false); return; }
 
       const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(
         `${wsProto}://${location.host}/ws/phone-audio?token=${encodeURIComponent(_authToken)}`
       );
       ws.binaryType = 'arraybuffer';
+      _voiceWs = ws;
+      _micStarting = false;
 
-      ws.onopen = async () => {
+      const beginCapture = async () => {
+        if (attempt !== _micAttempt || !_captureAllowed || _voiceWs !== ws) { _stopVoice(false, false); return; }
         const rate = ctx.sampleRate;
         const src  = ctx.createMediaStreamSource(stream);
 
@@ -503,11 +642,21 @@
           const burl = URL.createObjectURL(new Blob([wCode], { type: 'application/javascript' }));
           await ctx.audioWorklet.addModule(burl);
           URL.revokeObjectURL(burl);
+          if (attempt !== _micAttempt || !_captureAllowed || _voiceWs !== ws) return;
           const nd = new AudioWorkletNode(ctx, 'j');
           // Buffer to 1024 samples (64 ms at 16 kHz) before sending —
           // matches PC mic chunk size, prevents queue flooding on the server.
           let _pbuf = [], _plen = 0;
+          _flushMic = () => {
+            if (_plen && _captureAllowed && ws.readyState === 1) {
+              const out = new Int16Array(_plen); let off = 0;
+              for (const c of _pbuf) { out.set(c, off); off += c.length; }
+              ws.send(out.buffer);
+            }
+            _pbuf = []; _plen = 0;
+          };
           nd.port.onmessage = e => {
+            if (!_captureAllowed || attempt !== _micAttempt || _voiceWs !== ws) return;
             const chunk = new Int16Array(_f32toPcm16(e.data, rate));
             _pbuf.push(chunk); _plen += chunk.length;
             if (_plen >= 1024) {
@@ -518,12 +667,15 @@
             }
           };
           src.connect(nd);
+          nd.connect(ctx.destination); // processor writes silence, never mic audio
           _audioNd = nd;
         } catch (_) {
+          if (attempt !== _micAttempt || !_captureAllowed || _voiceWs !== ws) return;
           // ScriptProcessor fallback (deprecated, still works everywhere)
           const sp = ctx.createScriptProcessor(4096, 1, 1);
           sp.onaudioprocess = e => {
-            if (ws.readyState === 1) ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
+            if (_captureAllowed && attempt === _micAttempt && _voiceWs === ws && ws.readyState === 1)
+              ws.send(_f32toPcm16(e.inputBuffer.getChannelData(0), rate));
           };
           src.connect(sp); sp.connect(ctx.destination);
           _audioNd = sp;
@@ -535,16 +687,46 @@
         sys('Voice live — speak now');
         toast('🎤 Live');
       };
+      // Server acknowledges exclusive ownership before capture starts.
+      ws.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.type === 'audio_ready') beginCapture().catch(e => {
+          if (attempt !== _micAttempt) return;
+          _stopVoice();
+          sys('Voice setup failed: ' + e.message);
+          if (automatic) _showManualResume();
+        });
+      };
 
-      ws.onclose = () => { _stopVoice(); };
-      ws.onerror = () => { sys('Voice connection failed.'); _stopVoice(); };
+      ws.onclose = (event) => { if (_voiceWs === ws) _stopVoice(); if (event && event.code === 4001) _routeToLogin(); };
+      ws.onerror = () => { if (_voiceWs === ws) { sys('Voice connection failed or microphone busy.'); _stopVoice(); } };
 
       _voiceWs  = ws;
       _audioCtx = ctx;
       _micStm   = stream;
+      } catch (e) {
+        if (attempt !== _micAttempt) return;
+        _stopVoice();
+        sys('Voice setup failed: ' + e.message);
+        if (automatic) _showManualResume();
+      }
     }
 
-    function _stopVoice() {
+    function _stopVoice(explicit = false, clearResume = true) {
+      if (clearResume) _micAutoResume = false;
+      if (explicit && _voiceWs?.readyState === 1) {
+        if (_flushMic) _flushMic();
+        const ending = _voiceWs;
+        ending.send(JSON.stringify({type:'audio_stream_end'}));
+        // Do not close before the server reads ordered PCM + end marker.
+        ending.onmessage = e => { if (JSON.parse(e.data).type === 'audio_ended') ending.close(); };
+        ending.onerror = () => ending.close();
+        setTimeout(() => ending.close(), 2000);
+        _voiceWs = null;
+      }
+      ++_micAttempt;
+      _micStarting = false;
+      _flushMic = null;
       if (_audioNd)  { try { _audioNd.disconnect(); }  catch (_) {}; _audioNd  = null; }
       if (_audioCtx) { try { _audioCtx.close(); }      catch (_) {}; _audioCtx = null; }
       if (_micStm)   { _micStm.getTracks().forEach(t => t.stop()); _micStm = null; }
@@ -554,6 +736,22 @@
       }
       _micIdle();
     }
+
+    async function doStop() {
+      _stopVoice();
+      _captureAllowed = false;
+      micBtn.disabled = true;
+      try {
+        const response = await _authFetch('/api/interrupt', {method:'POST'});
+        if (!response.ok) sys('Stop failed — reconnect and pair again.');
+      } catch (_) { sys('Stop connection failed.'); }
+    }
+    window.addEventListener('pagehide', () => {
+      _leavingPage = true;
+      _recoveryActive = true;
+      _cancelRecoveryTimer();
+      _stopVoice();
+    });
   </script>
 </body>
 </html>

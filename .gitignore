@@ -5,13 +5,21 @@
 # never be.
 
 # ── Secrets. Committing any of these publishes them. ──────────────────────────
-config/api_keys.json          # your Gemini API key, plus per-plugin credentials
-config/certs/                 # the dashboard's TLS private key and certificate
-config/whatsapp_web/          # a LINKED WhatsApp session — committing it hands
-                              # somebody your WhatsApp account, not just a key
-**/token*.json                # Google OAuth tokens (Gmail / Calendar plugins)
-**/client_secret*.json        # Google OAuth client secrets
+# Gemini API key and per-plugin credentials
+config/api_keys.json
+# Dashboard TLS private key and certificate
+config/certs/
+# Linked WhatsApp session
+config/whatsapp_web/
+# OAuth tokens and client secrets
+# Spotify OAuth private token store (explicit name, overrides broad patterns)
+config/spotify_oauth.json
+
+**/token*.json
+**/client_secret*.json
 *credentials*.json
+config/device_credentials.json
+config/device_qr/
 .env
 .env.*
 
@@ -48,3 +56,6 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+.worktrees/
+deploy/cannanas/*.credentials
