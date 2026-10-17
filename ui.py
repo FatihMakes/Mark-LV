@@ -61,6 +61,11 @@ try:
 except Exception:      # pragma: no cover — HUD must never die over cosmetics
     HoloAvatar = None
 
+try:
+    from core.orb_hud import OrbHud
+except Exception:      # pragma: no cover — HUD must never die over cosmetics
+    OrbHud = None
+
 
 def _base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -423,8 +428,16 @@ class HudCanvas(QWidget):
             except Exception:
                 self._avatar = None
 
+        # Wireframe orb centrepiece (third HUD mode). Same soft-fail rule.
+        self._orb = None
+        if OrbHud is not None:
+            try:
+                self._orb = OrbHud()
+            except Exception:
+                self._orb = None
+
         # Which centrepiece to draw. Read once here and changed live by the
-        # settings toggle; the avatar object is kept either way so switching
+        # settings toggle; avatar/orb objects are kept either way so switching
         # back is instant and costs no reload.
         try:
             from memory.config_manager import get_hud_style
@@ -612,6 +625,9 @@ class HudCanvas(QWidget):
                               v_open=v_open, v_wide=v_wide or 0.0,
                               v_level=v_level, v_seq=v_seq,
                               v_hop=(sched[2] if sched is not None else 0.02))
+        elif self._orb is not None and self.hud_style == "orb":
+            self._orb.step(dt, amp, speaking=self.speaking,
+                           muted=self.muted, state=self.state)
         else:
             # Fallback core: slow "breathing" base target, lifted by the level.
             if now - self._last_t > (0.12 if self.speaking else 0.5):
@@ -883,10 +899,30 @@ class HudCanvas(QWidget):
                     _acc = qcol(C.PRI)
             self._avatar.paint(p, cx, _head_cy, _r_head, _main, _acc, qcol(C.BG))
 
-        # reactor core — the other centrepiece, and the fallback if the head
-        # could not be built. There is no third path: the old face.png branch
-        # was unreachable (no such file ships) and the bare orb it fell through
-        # to is what this replaces.
+        elif self._orb is not None and self.hud_style == "orb":
+            _band_t = 12.0
+            _band_h = max(60.0, _sy_status - 12.0 - _band_t)
+            _r = min(fw * 0.32, _band_h / 2.0)
+            _orb_cy = _band_t + _band_h / 2.0
+            if self.muted:
+                _main = _acc = qcol(C.MUTED_C)
+            else:
+                _main = qcol(C.PRI)
+                if self.speaking:
+                    _acc = qcol(C.ACC)
+                elif self.state in ("THINKING", "PROCESSING"):
+                    _acc = qcol(C.ACC2)
+                elif self.state == "LISTENING":
+                    _acc = qcol(C.GREEN)
+                else:
+                    _acc = qcol(C.PRI)
+            _paint_state = "RESPONDING" if self.speaking else self.state
+            self._orb.paint(p, cx, _orb_cy, _r, _main, _acc, qcol(C.BG),
+                            self._amp_disp, _paint_state, muted=self.muted,
+                            W=W, H=_band_h)
+
+        # reactor core — fallback centrepiece when face/orb are unavailable
+        # or when the user chose the reactor.
         else:
             _band_t = 12.0
             _band_h = max(60.0, _sy_status - 12.0 - _band_t)
@@ -6449,29 +6485,46 @@ class MainWindow(QMainWindow):
 
     def _refresh_hud_btn(self):
         from memory.config_manager import get_hud_style
-        face = get_hud_style() == "face"
-        # Neither state is "off", so both read as active — this is a choice
-        # between two things, not a switch with a disabled side.
+        style_name = get_hud_style()
+        # Neither state is "off", so all read as active — this is a choice
+        # between centrepieces, not a switch with a disabled side.
         style = f"""
             QPushButton {{ background: {C.PANEL2}; color: {C.PRI};
                 border: 1px solid {C.BORDER_A}; border-radius: 3px;
                 text-align: left; padding: 0 8px; }}
             QPushButton:hover {{ color: {C.WHITE}; border: 1px solid {C.BORDER_B}; }}"""
-        self._hud_btn.setText("🧑  HUD: ANIMATED FACE" if face
-                              else "◉  HUD: REACTOR CORE")
+        labels = {
+            "face": "🧑  HUD: ANIMATED FACE",
+            "core": "◉  HUD: REACTOR CORE",
+            "orb":  "◈  HUD: WIREFRAME ORB",
+        }
+        tips = {
+            "face": ("An animated head that speaks your words and shows what "
+                     "JARVIS is doing. Tap to switch centrepiece."),
+            "core": ("A reactor core that turns with the state and moves with "
+                     "your voice. Tap to switch centrepiece."),
+            "orb":  ("A wireframe orb with fresnel glow and pulse rings. "
+                     "Tap to switch centrepiece."),
+        }
+        self._hud_btn.setText(labels.get(style_name, labels["face"]))
         self._hud_btn.setStyleSheet(style)
-        self._hud_btn.setToolTip(
-            "An animated head that speaks your words and shows what JARVIS is "
-            "doing. Tap to switch to the reactor core."
-            if face else
-            "A reactor core that turns with the state and moves with your voice. "
-            "Tap to switch to the animated head.")
+        self._hud_btn.setToolTip(tips.get(style_name, tips["face"]))
 
     def _toggle_hud_style(self):
-        """Swap the centrepiece. Both objects stay in memory, so the change is
-        instant and switching back costs nothing."""
-        from memory.config_manager import get_hud_style, save_hud_style
-        want = "core" if get_hud_style() == "face" else "face"
+        """Cycle face → core → orb → face. Objects stay in memory, so the
+        change is instant and switching back costs nothing."""
+        from memory.config_manager import get_hud_style, save_hud_style, HUD_STYLES
+        cur = get_hud_style()
+        try:
+            i = HUD_STYLES.index(cur)
+        except ValueError:
+            i = 0
+        want = HUD_STYLES[(i + 1) % len(HUD_STYLES)]
+        # Skip orb if it failed to construct; skip face if avatar missing.
+        if want == "orb" and getattr(self.hud, "_orb", None) is None:
+            want = HUD_STYLES[(i + 2) % len(HUD_STYLES)]
+        if want == "face" and getattr(self.hud, "_avatar", None) is None:
+            want = "core"
         save_hud_style(want)
         try:
             self.hud.hud_style = want
@@ -6479,9 +6532,12 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._refresh_hud_btn()
-        self._log.append_log(
-            "SYS: HUD switched to the animated face." if want == "face"
-            else "SYS: HUD switched to the reactor core.")
+        names = {
+            "face": "the animated face",
+            "core": "the reactor core",
+            "orb":  "the wireframe orb",
+        }
+        self._log.append_log(f"SYS: HUD switched to {names.get(want, want)}.")
 
     def _toggle_ptt(self):
         from memory.config_manager import (get_push_to_talk_enabled,
