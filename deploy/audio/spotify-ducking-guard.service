@@ -1,0 +1,23 @@
+# Independent user service: do NOT PartOf/BindsTo jarvis.service.
+[Unit]
+Description=Recover expired JARVIS Spotify gain envelopes
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Mark-LV-LaCasa
+ExecStart=%h/Mark-LV-LaCasa/.venv/bin/python -m core.ducking guard
+Environment=PULSE_SERVER=unix:%t/pulse/native
+Environment=PYTHONUNBUFFERED=1
+RuntimeDirectory=jarvis-ducking
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0077
+Restart=always
+RestartSec=2
+TimeoutStopSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

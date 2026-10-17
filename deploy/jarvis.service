@@ -1,0 +1,29 @@
+# Install as ~/.config/systemd/user/jarvis.service for user lacasa.
+# Requires trusted private HTTPS reverse proxy to 127.0.0.1:8000.
+[Unit]
+Description=LaCasa headless JARVIS voice assistant
+After=network-online.target pipewire-pulse.service
+Wants=network-online.target pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Mark-LV-LaCasa
+ExecStart=%h/Mark-LV-LaCasa/.venv/bin/python main.py
+Environment=JARVIS_HEADLESS=true
+Environment=JARVIS_CAPTURE_SOURCE=phone
+Environment=JARVIS_BIND=127.0.0.1
+Environment=JARVIS_PUBLIC_URL=https://lacasa-server.tail7a9c2.ts.net
+Environment=PYTHONUNBUFFERED=1
+Environment=PULSE_SERVER=unix:%t/pulse/native
+RuntimeDirectory=jarvis
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+# EX_CONFIG: invalid/missing credentials or configuration require local repair.
+# Ordinary listener/startup failures remain retryable under Restart=on-failure.
+RestartPreventExitStatus=78
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

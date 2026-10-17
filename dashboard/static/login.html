@@ -137,7 +137,9 @@
     <div class="logo"><em>J</em>ARVIS</div>
     <div class="sub">Remote Access</div>
     <p id="reconnecting">Reconnecting…</p>
-    <p class="hint">Press <strong style="color:var(--text)">Remote Control</strong> in the JARVIS desktop app to get a QR code or session key.</p>
+    <p class="hint">Ask the server operator for a fresh pairing link or session key.
+      On the server, from the JARVIS checkout using its Python environment, run
+      <code>python -m core.headless pair</code>.</p>
     <div class="key-wrap">
       <input class="key-input" id="key" type="text" maxlength="6"
              autocomplete="off" autocorrect="off" spellcheck="false"
@@ -146,9 +148,11 @@
     <div class="err" id="err"></div>
     <button class="btn" onclick="doLogin()">CONNECT</button>
     <p class="voice-note">
-      🎤 <strong style="color:var(--text)">Voice commands:</strong> open
-      <code>chrome://flags</code> on your phone, search
-      <code>Insecure origins treated as secure</code>, add your JARVIS URL, tap Relaunch.
+      🎤 <strong style="color:var(--text)">Voice commands:</strong> open the trusted
+      private HTTPS link in Safari while connected to the private network/Tailscale.
+      Tap the microphone button and allow microphone access. If denied, check
+      Safari's website microphone permissions, then tap again. Do not bypass
+      certificate warnings or browser security protections.
     </p>
   </div>
 
