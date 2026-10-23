@@ -596,6 +596,10 @@ class JarvisLive:
         # branch below that reads it treats None as "everything is available",
         # so the Live path is exactly what it was.
         self._engine_caps          = None
+        # Routing override is deliberately runtime-only: it does not rewrite
+        # providers.mode or any of the user's provider configuration.
+        self._offline_manual       = False
+        self._network_online       = True
         # Set only when a local pipeline is running, so push-to-talk can tell it
         # the turn is over. Live decides that on the server; nothing does here.
         self._engine               = None
@@ -710,6 +714,9 @@ class JarvisLive:
         self.ui.on_wake_toggle   = self._ui_wake_toggle   # (enable: bool) -> str
         self.ui.on_wake_manual   = self._ui_wake_manual   # () -> toggle awake/asleep
         self.ui.on_wake_install  = self._ui_wake_install  # () -> (ok, msg)
+        self.ui.on_offline_toggle = self._ui_toggle_offline
+        self.ui.offline_get_state = self._offline_state
+        self.ui.refresh_offline_button()
 
     # ── Wake word: state machine ─────────────────────────────────────────────
 
@@ -2219,18 +2226,103 @@ class JarvisLive:
     # ── main loop ───────────────────────────────────────────────────────────
 
     # ── Which engine holds the conversation ──────────────────────────────────
-    # Everything in this section is inert on a default install: `_engine_mode()`
-    # reads one key out of the config that is already loaded, gets "gemini", and
-    # returns before the providers package is imported. Delete the folder and
-    # the import below raises ImportError, which is caught and reported as
-    # "providers are not installed" — the assistant then runs exactly as it did
-    # before any of this existed.
+    def _offline_active(self) -> bool:
+        return bool(self._offline_manual or not self._network_online)
+
+    def _offline_state(self) -> dict:
+        return {"forced_local": self._offline_manual,
+                "online": self._network_online,
+                "local_active": self._offline_active()}
+
+    def _ui_toggle_offline(self) -> dict:
+        """Toggle a temporary local override without persisting provider settings."""
+        self._offline_manual = not self._offline_manual
+        if self._offline_manual:
+            self.ui.write_log(
+                "SYS: Local mode forced for this run — LM Studio / Llama 3.2 3B.")
+        else:
+            self.ui.write_log(
+                "SYS: Forced local mode disabled — automatic network routing restored.")
+        self.ui.refresh_offline_button()
+        self.request_reconnect(keep_context=False, reason="model routing")
+        return self._offline_state()
+
+    async def _internet_available(self) -> bool:
+        """Fast connectivity probe against the Gemini API host."""
+        writer = None
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("generativelanguage.googleapis.com", 443),
+                timeout=2.5)
+            return True
+        except Exception:
+            return False
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+    async def _watch_connectivity(self) -> None:
+        """Switch engines when internet disappears or returns."""
+        while True:
+            await asyncio.sleep(8)
+            online = await self._internet_available()
+            if online == self._network_online:
+                continue
+            self._network_online = online
+            self.ui.refresh_offline_button()
+            if self._offline_manual:
+                continue
+            if online:
+                self.ui.write_log(
+                    "NET: Internet restored — switching back to Gemini.")
+            else:
+                self.ui.write_log(
+                    "NET: Internet unavailable — switching to local LM Studio.")
+            self.request_reconnect(keep_context=False, reason=(
+                "internet restored" if online else "offline fallback"))
+
     def _engine_mode(self) -> str:
+        # Automatic offline fallback and the manual switch take precedence over
+        # the saved engine selection. Turning the switch off restores that
+        # selection; no provider architecture or saved configuration is changed.
+        if self._offline_active():
+            return "pipeline"
         try:
             from memory.config_manager import get_provider_mode
             return get_provider_mode()
         except Exception:
             return "gemini"
+
+    def _effective_pipeline(self) -> dict:
+        from memory.config_manager import get_pipeline
+        if self._offline_active():
+            return {"llm": "openai_compat", "stt": "whisper",
+                    "tts": "system_tts"}
+        return get_pipeline()
+
+    def _effective_provider_config(self, provider_id: str) -> dict:
+        from memory.config_manager import get_provider_config
+        cfg = get_provider_config(provider_id)
+        if not self._offline_active():
+            return cfg
+        # Temporary values for this run only. The LM Studio provider remains
+        # the same generic OpenAI-compatible provider used by every other backend.
+        if provider_id == "openai_compat":
+            cfg.update({
+                "base_url": "http://127.0.0.1:1234/v1",
+                "model": "llama-3.2-3b-instruct",
+                "api_key": "",
+                "max_tools": "12",
+                "max_tool_chars": "10000",
+            })
+        elif provider_id == "whisper":
+            cfg.update({"backend": "local", "model": "base",
+                        "device": "cpu", "language": ""})
+        return cfg
 
     def _resolve_engine_caps(self):
         """What the chosen engine can do — or None for Gemini Live.
@@ -2244,17 +2336,17 @@ class JarvisLive:
         if self._engine_mode() != "pipeline":
             return None
         try:
-            from memory.config_manager import get_pipeline, get_provider_config
             from providers import registry
 
-            pipe = get_pipeline()
+            pipe = self._effective_pipeline()
             llm_id = str(pipe.get("llm") or "").strip()
             if not llm_id:
                 raise RuntimeError("no language model is chosen")
-            missing = registry.missing_fields(llm_id, get_provider_config(llm_id))
+            llm_cfg = self._effective_provider_config(llm_id)
+            missing = registry.missing_fields(llm_id, llm_cfg)
             if missing:
                 raise RuntimeError(f"{llm_id} needs: {', '.join(missing)}")
-            llm = registry.build(llm_id, get_provider_config(llm_id))
+            llm = registry.build(llm_id, llm_cfg)
 
             # Ask the model whether it can see, once, and remember the answer.
             #
@@ -2307,11 +2399,10 @@ class JarvisLive:
                 yield session
             return
 
-        from memory.config_manager import get_pipeline, get_provider_config
         from providers import registry
         from providers.engine_pipeline import PipelineEngine
 
-        pipe = get_pipeline()
+        pipe = self._effective_pipeline()
 
         def part(slot):
             pid = str(pipe.get(slot) or "").strip()
@@ -2320,7 +2411,7 @@ class JarvisLive:
             # `log` so a provider can say what it is doing — downloading a
             # voice, loading a model — in the activity log rather than only on a
             # console the user may not be watching.
-            cfg = dict(get_provider_config(pid))
+            cfg = self._effective_provider_config(pid)
             cfg["log"] = self.ui.write_log
             return registry.build(pid, cfg)
 
@@ -2375,6 +2466,11 @@ class JarvisLive:
 
         while True:
             try:
+                self._network_online = await self._internet_available()
+                self.ui.refresh_offline_button()
+                if not self._network_online and not self._offline_manual:
+                    self.ui.write_log(
+                        "NET: No internet detected — local LM Studio mode selected.")
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
                 # Pick the rung to open the conversation on. A model resting
@@ -2474,6 +2570,7 @@ class JarvisLive:
 
                     self._reconnect_event.clear()  # ignore requests from before this session
                     tg.create_task(self._watch_reconnect())
+                    tg.create_task(self._watch_connectivity())
                     tg.create_task(self._watch_stall())
                     tg.create_task(self._send_realtime())
                     tg.create_task(self._listen_audio())
@@ -2542,6 +2639,19 @@ class JarvisLive:
                 err_str = str(e)
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
+
+                # If the live connection failed as the network went away,
+                # move to the local pipeline immediately instead of retrying
+                # Gemini with exponential backoff.
+                online_now = await self._internet_available()
+                if online_now != self._network_online:
+                    self._network_online = online_now
+                    self.ui.refresh_offline_button()
+                if not online_now and not self._offline_manual:
+                    self.ui.write_log(
+                        "NET: Internet unavailable — falling back to local LM Studio.")
+                    self._conn_backoff = 0
+                    continue
 
                 # Out of quota, or this model is not available to this key —
                 # step down the ladder and reconnect straight away. This is the
