@@ -529,13 +529,6 @@ class HudCanvas(QWidget):
         except Exception:
             pass
 
-    def refresh_offline_button(self) -> None:
-        """Thread-safe refresh of the always-visible routing indicator."""
-        try:
-            self._win._offline_refresh_sig.emit()
-        except Exception:
-            pass
-
     def set_audio_level(self, level: float) -> None:
         """Thread-safe entry point for the audio threads. Stores the louder of
         the incoming level and the current value so brief gaps between chunks
@@ -7117,6 +7110,13 @@ class JarvisUI:
     @wake_get_state.setter
     def wake_get_state(self, cb):
         self._win.wake_get_state = cb
+
+    def refresh_offline_button(self) -> None:
+        """Thread-safe refresh of the always-visible routing indicator."""
+        try:
+            self._win._offline_refresh_sig.emit()
+        except Exception:
+            pass
 
     def set_audio_level(self, level: float) -> None:
         """Thread-safe: feed a 0.0–1.0 live audio level to the HUD waveform.
