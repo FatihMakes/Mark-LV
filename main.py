@@ -2286,16 +2286,11 @@ class JarvisLive:
                 "internet restored" if online else "offline fallback"))
 
     def _engine_mode(self) -> str:
-        # Automatic offline fallback and the manual switch take precedence over
-        # the saved engine selection. Turning the switch off restores that
-        # selection; no provider architecture or saved configuration is changed.
-        if self._offline_active():
-            return "pipeline"
-        try:
-            from memory.config_manager import get_provider_mode
-            return get_provider_mode()
-        except Exception:
-            return "gemini"
+        # This temporary routing feature deliberately uses Gemini whenever the
+        # machine is online, irrespective of the saved provider-panel selection.
+        # Existing provider settings remain intact and are available again when
+        # this routing behaviour is changed in a future update.
+        return "pipeline" if self._offline_active() else "gemini"
 
     def _effective_pipeline(self) -> dict:
         from memory.config_manager import get_pipeline
@@ -2371,12 +2366,15 @@ class JarvisLive:
             caps["audio_out"] = bool(str(pipe.get("tts") or "").strip())
             return caps
         except Exception as e:
-            # A local engine that will not start must never mean no assistant.
-            # Falling back to Live is the whole reason the ladder exists, and
-            # the reason is said out loud rather than left in a console.
+            print(f"[JARVIS] Pipeline engine unavailable: {e}")
+            if self._offline_active():
+                # Do not silently attempt a cloud connection while the user has
+                # explicitly selected local mode or the network is unavailable.
+                self.ui.write_log(
+                    f"ERR: Local mode selected but LM Studio pipeline is unavailable: {e}")
+                raise RuntimeError(f"offline pipeline unavailable: {e}") from e
             self.ui.write_log(f"SYS: local engine unavailable ({e}) — "
                               f"using Gemini Live.")
-            print(f"[JARVIS] Pipeline engine unavailable: {e}")
             return None
 
     @asynccontextmanager
