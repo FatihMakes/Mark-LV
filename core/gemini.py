@@ -155,20 +155,28 @@ PROVIDER_PREFIX = "prov:"
 # cooldown after one attempt instead of being paid for on every call.
 _LADDERS = {
     FAST: (LIVE,
-           "gemini-2.5-flash-lite", "gemini-3.5-flash-lite",
-           "gemini-3.1-flash-lite", "gemini-flash-lite-latest",
-           "gemini-2.5-flash", "gemini-3.5-flash",
-           "gemini-3.6-flash", "gemini-3-flash-preview"),
+           # Cheapest/lightest stable endpoints first; keep the existing rungs.
+           "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+           "gemini-2.5-flash-lite", "gemini-flash-lite-latest",
+           "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash",
+           "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest",
+           # Expensive/high-capability model deliberately last.
+           "gemini-3.8-flash"),
     SMART: (LIVE,
-            "gemini-2.5-flash", "gemini-3.5-flash",
-            "gemini-2.5-flash-lite", "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-flash-latest"),
+            # Try lightweight models first; retain every previous SMART rung.
+            "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite", "gemini-flash-lite-latest",
+            "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash",
+            "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest",
+            "gemini-3.8-flash"),
     # Grounded search needs response.candidates[...].grounding_metadata, which a
     # Live turn does not produce. REST only, and it says so rather than silently
-    # returning an answer with no sources behind it.
-    SEARCH: ("gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite",
-             "gemini-flash-latest"),
+    # returning an answer with no sources behind it. Keep all existing search
+    # rungs, but prefer Flash-Lite; the 3.8 Flash endpoint is the final fallback.
+    SEARCH: ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+             "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash",
+             "gemini-3.6-flash", "gemini-3.7-flash", "gemini-flash-latest",
+             "gemini-3.8-flash"),
 }
 
 # The conversation's own model, and ONE careful fallback behind it.
