@@ -530,9 +530,9 @@ class HudCanvas(QWidget):
             pass
 
     def refresh_offline_button(self) -> None:
-        """Refresh the always-visible routing indicator from the Qt thread."""
+        """Thread-safe refresh of the always-visible routing indicator."""
         try:
-            self._win._refresh_offline_button()
+            self._win._offline_refresh_sig.emit()
         except Exception:
             pass
 
@@ -4251,6 +4251,7 @@ class MainWindow(QMainWindow):
     _cam_frame_sig  = pyqtSignal(bytes)      # live camera frame → HUD area
     _video_open_sig  = pyqtSignal(str, str, bool, str)  # video, title, muted, audio
     _wake_btns_sig   = pyqtSignal()          # wake state resolved off-thread
+    _offline_refresh_sig = pyqtSignal()      # model routing status from asyncio thread
     _video_close_sig = pyqtSignal()
     _video_mute_sig  = pyqtSignal(bool)
     _clipboard_sig  = pyqtSignal(str)        # clipboard text changed (thread-safe)
@@ -4537,6 +4538,7 @@ class MainWindow(QMainWindow):
         self._cam_stream_sig.connect(self._on_cam_stream)
         self._cam_frame_sig.connect(self._on_cam_frame)
         self._wake_btns_sig.connect(self._refresh_wake_btns)
+        self._offline_refresh_sig.connect(self._refresh_offline_button)
         self._video_open_sig.connect(self._on_video_open)
         self._video_close_sig.connect(self._on_video_close)
         self._video_mute_sig.connect(self._on_video_mute)
