@@ -85,8 +85,9 @@ def _read_full_config() -> dict:
 APP_VERSION  = "MARK LVI"
 APP_PROTOCOL = APP_VERSION.split()[-1]
 
-_DEFAULT_W, _DEFAULT_H = 980, 700
-_MIN_W,     _MIN_H     = 820, 580
+_DEFAULT_W, _DEFAULT_H = 1440, 810
+_MIN_W,     _MIN_H     = 960, 600
+_HEADER_H = 78
 _LEFT_W  = 148
 _RIGHT_W = 340
 
@@ -839,16 +840,114 @@ class HudCanvas(QWidget):
             p.drawText(QRectF(cx - r, cy - fsz, r * 2, fsz * 2),
                        Qt.AlignmentFlag.AlignCenter, name)
 
+    def _paint_cinematic_backdrop(self, p: QPainter, W: int, H: int) -> None:
+        """Give the existing live avatar a wide, cinematic hologram stage."""
+        cx = W / 2
+        atmosphere = QRadialGradient(cx, H * 0.42, max(W, H) * 0.76)
+        atmosphere.setColorAt(0.0, QColor(7, 18, 34, 255))
+        atmosphere.setColorAt(0.58, QColor(2, 9, 18, 255))
+        atmosphere.setColorAt(1.0, QColor(0, 4, 9, 255))
+        p.fillRect(self.rect(), QBrush(atmosphere))
+
+        for x, y, color, radius in (
+            (W * 0.06, H * 0.46, C.PRI, H * 0.62),
+            (W * 0.94, H * 0.43, C.RED, H * 0.58),
+        ):
+            glow = QRadialGradient(x, y, radius)
+            glow.setColorAt(0.0, qcol(color, 42))
+            glow.setColorAt(0.56, qcol(color, 15))
+            glow.setColorAt(1.0, qcol(color, 0))
+            p.fillRect(self.rect(), QBrush(glow))
+
+        # A sparse perspective floor gives the hologram a physical landing
+        # plane without competing with the live face or its status waveform.
+        horizon = H * 0.77
+        p.setPen(QPen(qcol(C.PRI, 28), 1))
+        for i in range(-7, 8):
+            end_x = cx + i * W * 0.115
+            p.drawLine(QLineF(cx, horizon, end_x, H))
+        for i in range(1, 9):
+            t = (i / 8) ** 1.75
+            y = horizon + (H - horizon) * t
+            p.setPen(QPen(qcol(C.PRI, 18 + i * 3), 1))
+            p.drawLine(QLineF(W * 0.04, y, W * 0.96, y))
+
+        # Low, elliptical reactor platform; blue on the left, red on the right.
+        platform_w = min(W * 0.66, 760)
+        platform_h = max(34, H * 0.085)
+        platform = QRectF(cx - platform_w / 2, H * 0.79,
+                          platform_w, platform_h)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.PRI, 118), 2))
+        p.drawArc(platform, 8 * 16, 162 * 16)
+        p.setPen(QPen(qcol(C.RED, 112), 2))
+        p.drawArc(platform, 188 * 16, 162 * 16)
+        inner = platform.adjusted(platform_w * 0.12, 7,
+                                  -platform_w * 0.12, -7)
+        p.setPen(QPen(qcol(C.PRI, 54), 1))
+        p.drawArc(inner, 180 * 16, 180 * 16)
+        p.setPen(QPen(qcol(C.RED, 48), 1))
+        p.drawArc(inner, 0, 180 * 16)
+
+        # Broken orbital traces echo the reference's red/cyan hologram rings.
+        orbit = QRectF(cx - min(W * 0.28, 330), H * 0.30,
+                       min(W * 0.56, 660), H * 0.25)
+        p.setPen(QPen(qcol(C.PRI, 66), 1.4))
+        p.drawArc(orbit, 14 * 16, 142 * 16)
+        p.setPen(QPen(qcol(C.RED, 64), 1.4))
+        p.drawArc(orbit, 194 * 16, 142 * 16)
+
+    def _paint_hologram_bust(self, p: QPainter, cx: float, head_y: float,
+                             head_r: float, W: int, H: int) -> None:
+        """Draw a restrained translucent shoulder silhouette behind the face."""
+        neck_y = head_y + head_r * 0.57
+        base_y = min(H * 0.91, neck_y + H * 0.30)
+        neck_w = head_r * 0.27
+        shoulder_w = min(W * 0.28, head_r * 1.02)
+        shoulder_y = neck_y + H * 0.075
+
+        bust = QPainterPath()
+        bust.moveTo(cx - neck_w, neck_y)
+        bust.lineTo(cx - neck_w * 1.12, shoulder_y)
+        bust.cubicTo(cx - shoulder_w * 0.78, shoulder_y + H * 0.005,
+                     cx - shoulder_w, shoulder_y + H * 0.11,
+                     cx - shoulder_w, base_y)
+        bust.lineTo(cx + shoulder_w, base_y)
+        bust.cubicTo(cx + shoulder_w, shoulder_y + H * 0.11,
+                     cx + shoulder_w * 0.78, shoulder_y + H * 0.005,
+                     cx + neck_w * 1.12, shoulder_y)
+        bust.lineTo(cx + neck_w, neck_y)
+        bust.closeSubpath()
+
+        fill = QLinearGradient(cx - shoulder_w, 0, cx + shoulder_w, 0)
+        fill.setColorAt(0.0, qcol(C.PRI, 30))
+        fill.setColorAt(0.5, qcol(C.PRI, 13))
+        fill.setColorAt(1.0, qcol(C.RED, 30))
+        p.setBrush(QBrush(fill))
+        p.setPen(QPen(qcol(C.PRI, 92), 1.5))
+        p.drawPath(bust)
+
+        right_edge = QPainterPath()
+        right_edge.moveTo(cx + neck_w, neck_y)
+        right_edge.lineTo(cx + neck_w * 1.12, shoulder_y)
+        right_edge.cubicTo(cx + shoulder_w * 0.78, shoulder_y + H * 0.005,
+                           cx + shoulder_w, shoulder_y + H * 0.11,
+                           cx + shoulder_w, base_y)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(qcol(C.RED, 150), 2))
+        p.drawPath(right_edge)
+
     def paintEvent(self, _):
         p = QPainter(self)
         if not p.isActive():      # device not ready (e.g. 0-size during layout) — skip cleanly
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), qcol(C.BG))
 
         W, H = self.width(), self.height()
         cx, cy = W / 2, H / 2
         fw = min(W, H)
+
+        self._paint_cinematic_backdrop(p, W, H)
 
         # grid dots — blitted from a cached layer; rebuilt only when the size
         # or the theme's ghost colour changes (so live re-theming still works).
@@ -881,6 +980,7 @@ class HudCanvas(QWidget):
                     _acc = qcol(C.GREEN)
                 else:
                     _acc = qcol(C.PRI)
+            self._paint_hologram_bust(p, cx, _head_cy, _r_head, W, H)
             self._avatar.paint(p, cx, _head_cy, _r_head, _main, _acc, qcol(C.BG))
 
         # reactor core — the other centrepiece, and the fallback if the head
@@ -1000,6 +1100,106 @@ class MetricBar(QWidget):
         p.drawText(QRectF(0, 4, W - 6, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._text)
 
         p.end()
+
+
+class MetricGauge(QWidget):
+    """Compact circular telemetry tile for the dashboard header."""
+
+    def __init__(self, label: str, color: str = C.PRI, parent=None):
+        super().__init__(parent)
+        self._label = label
+        self._color = color
+        self._value = 0.0
+        self._detail = "--"
+        self.setFixedSize(112, 56)
+
+    def set_value(self, pct: float, detail: str):
+        value = max(0.0, min(100.0, float(pct)))
+        if value == self._value and detail == self._detail:
+            return
+        self._value = value
+        self._detail = str(detail)
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(qcol(C.BORDER_A), 1))
+        p.setBrush(QBrush(qcol(C.PANEL2, 238)))
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 8, 8)
+
+        ring = QRectF(8, 7, 42, 42)
+        p.setPen(QPen(qcol(C.BAR_BG), 4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(ring, 0, 360 * 16)
+        color = C.RED if self._value > 85 else C.ACC if self._value > 65 else self._color
+        p.setPen(QPen(qcol(color), 4, Qt.PenStyle.SolidLine,
+                      Qt.PenCapStyle.RoundCap))
+        p.drawArc(ring, 90 * 16, -int(360 * 16 * self._value / 100))
+
+        p.setPen(QPen(qcol(C.WHITE), 1))
+        p.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        center_text = "N/A" if self._detail == "N/A" else f"{self._value:.0f}%"
+        p.drawText(ring, Qt.AlignmentFlag.AlignCenter, center_text)
+
+        p.setPen(QPen(qcol(C.PRI_DIM), 1))
+        p.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        text_w = max(42, self.width() - 62)
+        p.drawText(QRectF(58, 9, text_w, 13), Qt.AlignmentFlag.AlignLeft, self._label)
+        p.setPen(QPen(qcol(C.TEXT_MED), 1))
+        p.setFont(QFont("Courier New", 8))
+        p.drawText(QRectF(58, 24, text_w, 20),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   self._detail[:12])
+        p.end()
+
+
+class VoiceWaveform(QWidget):
+    """Small animated, state-aware waveform for the voice control cards."""
+
+    def __init__(self, hud: HudCanvas, parent=None):
+        super().__init__(parent)
+        self._hud = hud
+        self.setMinimumSize(100, 28)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self.update)
+        self._timer.start()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        if not p.isActive():
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        count = 31
+        gap = 3
+        slot = self.width() / count
+        amp = max(0.0, min(1.0, float(getattr(self._hud, "_amp_disp", 0.0))))
+        phase = time.time() * 4.4
+        middle = (count - 1) / 2
+        for i in range(count):
+            envelope = 1.0 - abs(i - middle) / max(1.0, middle)
+            idle = 0.12 + 0.08 * (0.5 + 0.5 * math.sin(phase + i * 0.53))
+            live = amp * (0.35 + 0.65 * envelope) * (
+                0.45 + 0.55 * math.sin(phase + i * 0.74) ** 2
+            )
+            height = max(3.0, (idle + live) * (self.height() * 0.78))
+            x = i * slot + gap / 2
+            y = (self.height() - height) / 2
+            if self._hud.muted:
+                color = qcol(C.MUTED_C, 140)
+            elif i < count * 0.53:
+                color = qcol(C.PRI if amp > 0.08 else C.PRI_DIM, 205)
+            else:
+                color = qcol(C.RED if amp > 0.08 else C.ACC, 185)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(color))
+            p.drawRoundedRect(QRectF(x, y, max(2.0, slot - gap), height), 2, 2)
+        p.end()
+
 
 class LogWidget(QTextEdit):
     _sig = pyqtSignal(str)
@@ -4269,13 +4469,14 @@ class MainWindow(QMainWindow):
             apply_ui_accent(_ui_color)
 
         self.setWindowTitle(f"{_display} — {APP_VERSION}")
-        self.setMinimumSize(_MIN_W, _MIN_H)
-        self.resize(_DEFAULT_W, _DEFAULT_H)
-
         screen = QApplication.primaryScreen().availableGeometry()
+        win_w = min(_DEFAULT_W, max(640, screen.width() - 48))
+        win_h = min(_DEFAULT_H, max(480, screen.height() - 72))
+        self.setMinimumSize(min(_MIN_W, win_w), min(_MIN_H, win_h))
+        self.resize(win_w, win_h)
         self.move(
-            (screen.width()  - _DEFAULT_W) // 2,
-            (screen.height() - _DEFAULT_H) // 2,
+            screen.x() + (screen.width() - win_w) // 2,
+            screen.y() + (screen.height() - win_h) // 2,
         )
 
         self.on_text_command   = None
@@ -4303,14 +4504,15 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self._left_panel = self._build_left_panel()
         root.addWidget(self._build_header())
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
 
-        self._left_panel = self._build_left_panel()
         body.addWidget(self._left_panel, stretch=0)
+        self._left_panel.hide()
 
         # Center column: HUD + resizable content panel via QSplitter
         self.hud = HudCanvas(face_path, _display)
@@ -4491,13 +4693,24 @@ class MainWindow(QMainWindow):
         self._center_split.setStretchFactor(0, 3)
         self._center_split.setStretchFactor(1, 1)
         self._center_split.setCollapsible(0, False)
+        self._center_split.splitterMoved.connect(
+            lambda *_: QTimer.singleShot(0, self._position_hud_overlays)
+        )
         body.addWidget(self._center_split, stretch=5)
 
         self._right_panel = self._build_right_panel()
         body.addWidget(self._right_panel, stretch=0)
+        self._right_panel.hide()
 
         root.addLayout(body, stretch=1)
         root.addWidget(self._build_footer())
+
+        # These floating cards sit above the avatar stage. The full command,
+        # file and activity panel remains one click away from the top ribbon.
+        self._hud_status_card = self._build_hud_status_card()
+        self._voice_status_card = self._build_voice_status_card()
+        self._voice_dock = self._build_voice_dock()
+        self._position_hud_overlays()
 
         # Quick-access drawer (floating overlay, built after central widget layout is done)
         self._quick_drawer = self._build_quick_drawer()
@@ -4564,8 +4777,9 @@ class MainWindow(QMainWindow):
         cw = self.centralWidget()
         pw = _CameraPreview._W
         ph = self._cam_preview.height()
+        right_offset = (_RIGHT_W if self._right_panel.isVisible() else 0)
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
+            cw.width() - right_offset - pw - 12,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -5159,8 +5373,12 @@ class MainWindow(QMainWindow):
         # Camera preview — bottom-right corner of the center/HUD area
         pw = _CameraPreview._W
         ph = self._cam_preview.height() or _CameraPreview._H
+        right_offset = (
+            _RIGHT_W if hasattr(self, "_right_panel") and self._right_panel.isVisible()
+            else 0
+        )
         self._cam_preview.setGeometry(
-            cw.width() - _RIGHT_W - pw - 12,
+            cw.width() - right_offset - pw - 12,
             cw.height() - ph - 28,
             pw, ph,
         )
@@ -5172,6 +5390,8 @@ class MainWindow(QMainWindow):
             self._position_quick_drawer()
         if hasattr(self, '_ctrl_drawer') and self._ctrl_drawer.isVisible():
             self._position_ctrl_drawer()
+        if hasattr(self, "_voice_dock"):
+            self._position_hud_overlays()
         self._fit_video()
 
     def _update_metrics(self):
@@ -5180,10 +5400,12 @@ class MainWindow(QMainWindow):
         # CPU
         cpu = snap["cpu"]
         self._bar_cpu.set_value(cpu, f"{cpu:.0f}%")
+        self._gauge_cpu.set_value(cpu, "LIVE LOAD")
 
         # MEM
         mem = snap["mem"]
         self._bar_mem.set_value(mem, f"{mem:.0f}%")
+        self._gauge_mem.set_value(mem, "MEMORY USE")
 
         # NET
         net = snap["net"]
@@ -5193,13 +5415,16 @@ class MainWindow(QMainWindow):
             net_str = f"{net:.1f}MB/s"
         net_pct = min(100, net * 10)  # 10 MB/s = %100
         self._bar_net.set_value(net_pct, net_str)
+        self._gauge_net.set_value(net_pct, net_str)
 
         # GPU
         gpu = snap["gpu"]
         if gpu >= 0:
             self._bar_gpu.set_value(gpu, f"{gpu:.0f}%")
+            self._gauge_gpu.set_value(gpu, "LIVE LOAD")
         else:
             self._bar_gpu.set_value(0, "N/A")
+            self._gauge_gpu.set_value(0, "N/A")
 
         # TMP
         tmp = snap["tmp"]
@@ -5214,9 +5439,14 @@ class MainWindow(QMainWindow):
             elapsed = time.time() - boot_t
             h = int(elapsed // 3600)
             m = int((elapsed % 3600) // 60)
-            self._uptime_lbl.setText(f"UP  {h:02d}:{m:02d}")
+            uptime = f"UP  {h:02d}:{m:02d}"
+            self._uptime_lbl.setText(uptime)
+            self._stage_uptime_lbl.setText(uptime)
         except Exception:
             self._uptime_lbl.setText("UP  --:--")
+            self._stage_uptime_lbl.setText("UP  --:--")
+
+        self._stage_load_lbl.setText(f"CPU {cpu:.0f}%   RAM {mem:.0f}%")
 
         try:
             proc_count = len(psutil.pids())
@@ -5227,32 +5457,93 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> QWidget:
         w = QWidget()
-        w.setFixedHeight(54)
-        w.setStyleSheet(f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};")
+        w.setFixedHeight(_HEADER_H)
+        w.setStyleSheet(
+            f"background: {C.DARK}; border-bottom: 1px solid {C.BORDER_B};"
+        )
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(16, 0, 16, 0)
+        lay.setContentsMargins(18, 8, 18, 8)
+        lay.setSpacing(8)
 
-        def _badge(txt, color=C.TEXT_MED):
-            l = QLabel(txt)
-            l.setFont(QFont("Courier New", 8))
-            l.setStyleSheet(f"color: {color}; background: transparent;")
-            return l
+        brand = QHBoxLayout()
+        brand.setSpacing(9)
+        mark = QLabel("▲")
+        mark.setFixedWidth(36)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFont(QFont("Arial", 29, QFont.Weight.Bold))
+        mark.setStyleSheet(f"color: {C.PRI}; background: transparent;")
+        brand.addWidget(mark)
 
-        lay.addWidget(_badge(APP_VERSION, C.PRI_DIM))
-        lay.addSpacing(8)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(0)
+        project_lbl = QLabel("PROJECT")
+        project_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        project_lbl.setStyleSheet(
+            f"color: {C.TEXT_MED}; background: transparent; letter-spacing: 2px;"
+        )
+        brand_text.addWidget(project_lbl)
+
+        _disp = self._assistant_name.upper()
+        self._title_lbl = QLabel(_disp)
+        self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._title_lbl.setFont(QFont("Arial", 17, QFont.Weight.Bold))
+        self._title_lbl.setStyleSheet(
+            f"color: {C.WHITE}; background: transparent; letter-spacing: 1px;"
+        )
+        brand_text.addWidget(self._title_lbl)
+        _sub_text = ("YOUR PERSONAL AI AGENT"
+                     if _disp in ("JARVIS", "J.A.R.V.I.S")
+                     else "PERSONAL AI ASSISTANT")
+        self._sub_lbl = QLabel(_sub_text)
+        self._sub_lbl.setFont(QFont("Courier New", 6, QFont.Weight.Bold))
+        self._sub_lbl.setStyleSheet(
+            f"color: {C.PRI_DIM}; background: transparent; letter-spacing: 1px;"
+        )
+        brand_text.addWidget(self._sub_lbl)
+        brand.addLayout(brand_text)
+        lay.addLayout(brand)
+        lay.addSpacing(16)
+
+        gauges = QHBoxLayout()
+        gauges.setSpacing(6)
+        self._gauge_cpu = MetricGauge("CPU", C.PRI)
+        self._gauge_gpu = MetricGauge("GPU", C.ACC)
+        self._gauge_mem = MetricGauge("RAM", C.GREEN)
+        self._gauge_net = MetricGauge("NET", C.ACC2)
+        self._metric_gauges = (
+            self._gauge_cpu, self._gauge_gpu, self._gauge_mem, self._gauge_net
+        )
+        for gauge in self._metric_gauges:
+            gauges.addWidget(gauge)
+        lay.addLayout(gauges)
+        lay.addStretch(1)
+
+        self._sys_btn = QPushButton("◈")
+        self._sys_btn.setFixedSize(30, 30)
+        self._sys_btn.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
+        self._sys_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._sys_btn.setToolTip("Show system details")
+        self._sys_btn.setStyleSheet(self._drawer_btn_style())
+        self._sys_btn.setCheckable(True)
+        self._sys_btn.clicked.connect(self._toggle_system_panel)
+        lay.addWidget(self._sys_btn)
+
+        self._tools_btn = QPushButton("☷")
+        self._tools_btn.setFixedSize(30, 30)
+        self._tools_btn.setFont(QFont("Courier New", 12, QFont.Weight.Bold))
+        self._tools_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._tools_btn.setToolTip("Show activity, files and command input")
+        self._tools_btn.setStyleSheet(self._drawer_btn_style())
+        self._tools_btn.setCheckable(True)
+        self._tools_btn.clicked.connect(self._toggle_tools_panel)
+        lay.addWidget(self._tools_btn)
+
         self._drawer_btn = QPushButton("⚙")
-        self._drawer_btn.setFixedSize(26, 26)
+        self._drawer_btn.setFixedSize(30, 30)
         self._drawer_btn.setFont(QFont("Courier New", 11))
         self._drawer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._drawer_btn.setToolTip("Settings & Controls")
-        self._drawer_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {C.TEXT_DIM};
-                border: 1px solid {C.BORDER}; border-radius: 4px;
-            }}
-            QPushButton:hover {{ color: {C.PRI}; border-color: {C.PRI_DIM}; }}
-            QPushButton:checked {{ color: {C.PRI}; border-color: {C.PRI}; background: {C.PRI_GHO}; }}
-        """)
+        self._drawer_btn.setStyleSheet(self._drawer_btn_style())
         self._drawer_btn.setCheckable(True)
         self._drawer_btn.setToolTip("Setup — things you set once")
         self._drawer_btn.clicked.connect(self._toggle_drawer)
@@ -5265,38 +5556,18 @@ class MainWindow(QMainWindow):
         # day. Separating them by that — setup behind ⚙, everyday behind 🎛 —
         # is what makes each list short enough to read at a glance.
         self._ctrl_btn = QPushButton("🎛")
-        self._ctrl_btn.setFixedSize(26, 26)
+        self._ctrl_btn.setFixedSize(30, 30)
         self._ctrl_btn.setFont(QFont("Courier New", 11))
         self._ctrl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ctrl_btn.setToolTip("Controls — the everyday switches")
-        self._ctrl_btn.setStyleSheet(self._drawer_btn.styleSheet())
+        self._ctrl_btn.setStyleSheet(self._drawer_btn_style())
         self._ctrl_btn.setCheckable(True)
         self._ctrl_btn.clicked.connect(self._toggle_controls)
-        lay.addSpacing(4)
         lay.addWidget(self._ctrl_btn)
-        lay.addStretch()
-
-        mid = QVBoxLayout(); mid.setSpacing(1)
-        _disp = self._assistant_name.upper()
-        self._title_lbl = QLabel(_disp)
-        self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title_lbl.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
-        self._title_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
-        mid.addWidget(self._title_lbl)
-        _sub_text = ("A Friendly Assistant"
-                     if _disp in ("JARVIS", "J.A.R.V.I.S")
-                     else "Personal AI Assistant")
-        self._sub_lbl = QLabel(_sub_text)
-        self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sub_lbl.setFont(QFont("Courier New", 7))
-        self._sub_lbl.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
-        mid.addWidget(self._sub_lbl)
-        lay.addLayout(mid)
-        lay.addStretch()
 
         right_col = QVBoxLayout(); right_col.setSpacing(2)
         self._clock_lbl = QLabel("00:00:00")
-        self._clock_lbl.setFont(QFont("Courier New", 14, QFont.Weight.Bold))
+        self._clock_lbl.setFont(QFont("Courier New", 13, QFont.Weight.Bold))
         self._clock_lbl.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         self._clock_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_col.addWidget(self._clock_lbl)
@@ -5308,9 +5579,30 @@ class MainWindow(QMainWindow):
         lay.addLayout(right_col)
         return w
 
+    @staticmethod
+    def _drawer_btn_style() -> str:
+        return f"""
+            QPushButton {{
+                background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                color: {C.PRI}; border-color: {C.PRI_DIM};
+                background: {C.PRI_GHO};
+            }}
+            QPushButton:checked {{
+                color: {C.PRI}; border-color: {C.PRI};
+                background: {C.PRI_GHO};
+            }}
+        """
+
     def _tick_clock(self):
+        current = time.strftime("%H:%M")
         self._clock_lbl.setText(time.strftime("%H:%M:%S"))
         self._date_lbl.setText(time.strftime("%a %d %b %Y"))
+        if hasattr(self, "_stage_clock_lbl"):
+            self._stage_clock_lbl.setText(current)
+            self._stage_date_lbl.setText(time.strftime("%a, %d %b %Y"))
 
     def _build_left_panel(self) -> QWidget:
         w = QWidget()
@@ -5451,6 +5743,183 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._mute_btn)
 
         return w
+
+    def _build_hud_status_card(self) -> QWidget:
+        card = QWidget(self._center_split)
+        card.setObjectName("HudStatusCard")
+        card.setStyleSheet("""
+            QWidget#HudStatusCard {
+                background: rgba(1, 12, 22, 224);
+                border: 1px solid rgba(0, 177, 225, 150);
+                border-radius: 12px;
+            }
+            QLabel { background: transparent; border: none; }
+        """)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(3)
+
+        eyebrow = QLabel("◈  LOCAL SYSTEM")
+        eyebrow.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        eyebrow.setStyleSheet(f"color: {C.PRI};")
+        lay.addWidget(eyebrow)
+
+        self._stage_clock_lbl = QLabel("--:--")
+        self._stage_clock_lbl.setFont(QFont("Arial", 25, QFont.Weight.DemiBold))
+        self._stage_clock_lbl.setStyleSheet(f"color: {C.WHITE};")
+        lay.addWidget(self._stage_clock_lbl)
+
+        self._stage_date_lbl = QLabel("")
+        self._stage_date_lbl.setFont(QFont("Courier New", 7))
+        self._stage_date_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        lay.addWidget(self._stage_date_lbl)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
+        lay.addWidget(divider)
+
+        self._stage_machine_lbl = QLabel(
+            f"OS  { {'Windows': 'WIN', 'Darwin': 'macOS', 'Linux': 'LINUX'}.get(_OS, _OS.upper()) }"
+        )
+        self._stage_machine_lbl.setFont(QFont("Courier New", 7))
+        self._stage_machine_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        lay.addWidget(self._stage_machine_lbl)
+
+        self._stage_load_lbl = QLabel("CPU  --%    RAM  --%")
+        self._stage_load_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._stage_load_lbl.setStyleSheet(f"color: {C.PRI};")
+        lay.addWidget(self._stage_load_lbl)
+
+        self._stage_uptime_lbl = QLabel("UP  --:--")
+        self._stage_uptime_lbl.setFont(QFont("Courier New", 7))
+        self._stage_uptime_lbl.setStyleSheet(f"color: {C.GREEN};")
+        lay.addWidget(self._stage_uptime_lbl)
+        return card
+
+    def _build_voice_status_card(self) -> QWidget:
+        card = QWidget(self._center_split)
+        card.setObjectName("VoiceStatusCard")
+        card.setStyleSheet("""
+            QWidget#VoiceStatusCard {
+                background: rgba(1, 12, 22, 224);
+                border: 1px solid rgba(0, 177, 225, 150);
+                border-radius: 12px;
+            }
+            QLabel { background: transparent; border: none; }
+        """)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(13, 9, 13, 8)
+        lay.setSpacing(2)
+
+        self._voice_title_lbl = QLabel(self._assistant_name.upper())
+        self._voice_title_lbl.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+        self._voice_title_lbl.setStyleSheet(f"color: {C.WHITE};")
+        lay.addWidget(self._voice_title_lbl)
+
+        self._voice_wave = VoiceWaveform(self.hud, card)
+        self._voice_wave.setFixedHeight(28)
+        lay.addWidget(self._voice_wave)
+
+        self._voice_state_lbl = QLabel("VOICE LINK  ·  INITIALISING")
+        self._voice_state_lbl.setFont(QFont("Courier New", 7))
+        self._voice_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._voice_state_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        lay.addWidget(self._voice_state_lbl)
+        return card
+
+    def _build_voice_dock(self) -> QWidget:
+        dock = QWidget(self._center_split)
+        dock.setObjectName("VoiceDock")
+        dock.setStyleSheet("""
+            QWidget#VoiceDock {
+                background: rgba(1, 11, 22, 238);
+                border: 1px solid rgba(0, 177, 225, 160);
+                border-radius: 28px;
+            }
+            QLabel { background: transparent; border: none; }
+        """)
+
+        panel_layout = self._right_panel.layout()
+        panel_layout.removeWidget(self._mute_btn)
+        panel_layout.removeWidget(self._interrupt_btn)
+
+        self._mute_btn.setFixedSize(54, 50)
+        self._mute_btn.setFont(QFont("Arial", 17, QFont.Weight.Bold))
+        self._mute_btn.setToolTip("Toggle microphone (F4)")
+        self._interrupt_btn.setFixedSize(54, 50)
+        self._interrupt_btn.setText("■")
+        self._interrupt_btn.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        self._interrupt_btn.setToolTip("Interrupt assistant speech (Esc)")
+        self._interrupt_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(0, 19, 30, 220);
+                color: {C.PRI};
+                border: 1px solid {C.BORDER_B};
+                border-radius: 25px;
+            }}
+            QPushButton:hover {{
+                color: {C.WHITE}; border-color: {C.PRI};
+                background: {C.PRI_GHO};
+            }}
+            QPushButton:pressed {{ background: #003047; }}
+            QPushButton:focus-visible {{ border: 2px solid {C.PRI}; }}
+        """)
+
+        row = QHBoxLayout(dock)
+        row.setContentsMargins(9, 7, 9, 7)
+        row.setSpacing(10)
+        row.addWidget(self._mute_btn)
+
+        wave_column = QVBoxLayout()
+        wave_column.setContentsMargins(0, 0, 0, 0)
+        wave_column.setSpacing(0)
+        self._dock_wave = VoiceWaveform(self.hud, dock)
+        self._dock_wave.setFixedHeight(31)
+        wave_column.addWidget(self._dock_wave)
+        self._dock_state_lbl = QLabel("LISTENING")
+        self._dock_state_lbl.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._dock_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._dock_state_lbl.setStyleSheet(f"color: {C.TEXT_MED};")
+        wave_column.addWidget(self._dock_state_lbl)
+        row.addLayout(wave_column, stretch=1)
+        row.addWidget(self._interrupt_btn)
+
+        self._style_mute_btn()
+        return dock
+
+    def _position_hud_overlays(self) -> None:
+        if not hasattr(self, "_hud_cam_stack"):
+            return
+        stage = self._hud_cam_stack.geometry()
+        if stage.width() <= 0 or stage.height() <= 0:
+            return
+        W, H = stage.width(), stage.height()
+        left_w = min(218, max(178, int(W * 0.22)))
+        right_w = min(220, max(178, int(W * 0.22)))
+        self._hud_status_card.setGeometry(18, stage.y() + 30, left_w, 174)
+        self._voice_status_card.setGeometry(
+            W - right_w - 18, stage.y() + max(90, int(stage.height() * 0.28)),
+            right_w, 105
+        )
+        dock_w = min(460, max(330, int(W * 0.42)))
+        dock_h = 68
+        dock_y = stage.y() + stage.height() - dock_h - 20
+        self._voice_dock.setGeometry((W - dock_w) // 2, dock_y, dock_w, dock_h)
+        self._hud_status_card.show()
+        self._voice_status_card.show()
+        self._voice_dock.show()
+        self._hud_status_card.raise_()
+        self._voice_status_card.raise_()
+        self._voice_dock.raise_()
+
+    def _toggle_system_panel(self, checked: bool = False) -> None:
+        self._left_panel.setVisible(bool(checked))
+        QTimer.singleShot(0, self._position_hud_overlays)
+
+    def _toggle_tools_panel(self, checked: bool = False) -> None:
+        self._right_panel.setVisible(bool(checked))
+        QTimer.singleShot(0, self._position_hud_overlays)
 
     def _build_quick_drawer(self) -> QWidget:
         """Floating overlay panel shown when the ⚙ header button is toggled."""
@@ -5678,7 +6147,7 @@ class MainWindow(QMainWindow):
         _W = 220
         drawer.setFixedWidth(_W)
         drawer.adjustSize()
-        drawer.setGeometry(left, 54, _W, drawer.sizeHint().height())
+        drawer.setGeometry(left, _HEADER_H, _W, drawer.sizeHint().height())
 
     def _position_quick_drawer(self):
         if hasattr(self, "_quick_drawer"):
@@ -5778,6 +6247,9 @@ class MainWindow(QMainWindow):
             QPushButton:hover {{ color: {C.TEXT}; border-color: {C.BORDER_B}; }}
         """)
         dismiss.clicked.connect(w.hide)
+        dismiss.clicked.connect(
+            lambda: QTimer.singleShot(0, self._position_hud_overlays)
+        )
         hdr.addWidget(dismiss)
         lay.addLayout(hdr)
 
@@ -5833,6 +6305,7 @@ class MainWindow(QMainWindow):
         if first_show:
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 220, 120), 220])
+            QTimer.singleShot(0, self._position_hud_overlays)
 
     # ── document review ──────────────────────────────────────────────────────
     # Rendered as rich text into the content panel that already exists, rather
@@ -5918,6 +6391,7 @@ class MainWindow(QMainWindow):
         if first_show:
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 260, 120), 260, 0])
+            QTimer.singleShot(0, self._position_hud_overlays)
 
     # ── quiz panel ───────────────────────────────────────────────────────────
     # An interactive twin of the content panel. The plugin only ever hands over
@@ -6048,11 +6522,13 @@ class MainWindow(QMainWindow):
         if first_show:
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 250, 120), 0, 250])
+            QTimer.singleShot(0, self._position_hud_overlays)
         self._quiz_render()
 
     def _hide_quiz(self):
         self._quiz = None
         self._quiz_panel.hide()
+        QTimer.singleShot(0, self._position_hud_overlays)
 
     def _quiz_clear_answers(self):
         while self._quiz_answers_lay.count():
@@ -6161,6 +6637,7 @@ class MainWindow(QMainWindow):
         unsure = sum(1 for r in results if r["correct"] is None)
         total = len(results)
         self._quiz_panel.hide()
+        QTimer.singleShot(0, self._position_hud_overlays)
         self._quiz = None
 
         self._log.append_log(f"QUIZ: {topic or 'quiz'} — {right}/{total} correct")
@@ -6647,6 +7124,8 @@ class MainWindow(QMainWindow):
         display = self._assistant_name.upper()
         self.setWindowTitle(f"{display} — {APP_VERSION}")
         self._title_lbl.setText(display)
+        if hasattr(self, "_voice_title_lbl"):
+            self._voice_title_lbl.setText(display)
         if display in ("JARVIS", "J.A.R.V.I.S"):
             self._sub_lbl.setText("Just A Rather Very Intelligent System")
         else:
@@ -6866,21 +7345,26 @@ class MainWindow(QMainWindow):
 
     def _style_mute_btn(self):
         if self._muted:
-            self._mute_btn.setText("🔇  MICROPHONE MUTED")
+            self._mute_btn.setText("🔇")
+            self._mute_btn.setToolTip("Microphone muted — click to listen (F4)")
             self._mute_btn.setStyleSheet(f"""
                 QPushButton {{
                     background: #140006; color: {C.MUTED_C};
-                    border: 1px solid {C.MUTED_C}; border-radius: 3px;
+                    border: 1px solid {C.MUTED_C}; border-radius: 25px;
                 }}
+                QPushButton:hover {{ background: #26000d; }}
+                QPushButton:focus-visible {{ border: 2px solid {C.MUTED_C}; }}
             """)
         else:
-            self._mute_btn.setText("🎙  MICROPHONE ACTIVE")
+            self._mute_btn.setText("🎙")
+            self._mute_btn.setToolTip("Microphone active — click to mute (F4)")
             self._mute_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background: #00140a; color: {C.GREEN};
-                    border: 1px solid {C.GREEN}; border-radius: 3px;
+                    background: rgba(0, 20, 10, 220); color: {C.GREEN};
+                    border: 1px solid {C.GREEN}; border-radius: 25px;
                 }}
                 QPushButton:hover {{ background: #001f10; }}
+                QPushButton:focus-visible {{ border: 2px solid {C.GREEN}; }}
             """)
 
     def _send(self):
@@ -6894,6 +7378,22 @@ class MainWindow(QMainWindow):
     def _apply_state(self, state: str):
         self.hud.state    = state
         self.hud.speaking = (state == "SPEAKING")
+        labels = {
+            "LISTENING": ("LISTENING…", C.GREEN),
+            "SPEAKING": ("SPEAKING…", C.ACC),
+            "THINKING": ("THINKING…", C.ACC2),
+            "PROCESSING": ("WORKING…", C.ACC2),
+            "MUTED": ("MICROPHONE MUTED", C.MUTED_C),
+            "SLEEPING": ("SLEEPING", C.TEXT_DIM),
+            "INITIALISING": ("VOICE LINK  ·  STARTING", C.TEXT_MED),
+        }
+        label, color = labels.get(state, (state.replace("_", " "), C.TEXT_MED))
+        if hasattr(self, "_voice_state_lbl"):
+            self._voice_state_lbl.setText(label)
+            self._voice_state_lbl.setStyleSheet(f"color: {color};")
+        if hasattr(self, "_dock_state_lbl"):
+            self._dock_state_lbl.setText(label)
+            self._dock_state_lbl.setStyleSheet(f"color: {color};")
 
     def _check_config(self) -> bool:
         if not API_FILE.exists(): return False
