@@ -2638,6 +2638,11 @@ class JarvisLive:
                 print(f"[JARVIS] Error ({type(e).__name__}): {e}")
                 traceback.print_exc()
 
+                if self._offline_active() and "offline pipeline unavailable" in err_str:
+                    # A missing local server/model is not a Gemini model failure.
+                    self._conn_backoff = 3
+                    continue
+
                 # If the live connection failed as the network went away,
                 # move to the local pipeline immediately instead of retrying
                 # Gemini with exponential backoff.
