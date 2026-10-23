@@ -529,6 +529,13 @@ class HudCanvas(QWidget):
         except Exception:
             pass
 
+    def refresh_offline_button(self) -> None:
+        """Refresh the always-visible routing indicator from the Qt thread."""
+        try:
+            self._win._refresh_offline_button()
+        except Exception:
+            pass
+
     def set_audio_level(self, level: float) -> None:
         """Thread-safe entry point for the audio threads. Stores the louder of
         the incoming level and the current value so brief gaps between chunks
@@ -4288,6 +4295,8 @@ class MainWindow(QMainWindow):
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas, set by JarvisLive
         self.on_wake_toggle    = None   # callable: (enable: bool) -> str, set by JarvisLive
         self.on_wake_manual    = None   # callable: () -> None — manual sleep/wake
+        self.on_offline_toggle = None   # callable: () -> dict — toggle forced local mode
+        self.offline_get_state = None   # callable: () -> dict — current model routing state
         self.on_push_to_talk   = None   # callable: (enable: bool) -> str scope
         self.ptt_hold          = None   # callable: (held: bool) -> None — windowed chord
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
@@ -5274,6 +5283,25 @@ class MainWindow(QMainWindow):
         self._ctrl_btn.clicked.connect(self._toggle_controls)
         lay.addSpacing(4)
         lay.addWidget(self._ctrl_btn)
+
+        # Temporary routing override; provider architecture and saved settings
+        # remain untouched. This control stays visible even when drawers are shut.
+        self._offline_btn = QPushButton("☁  AI ROUTING: AUTO")
+        self._offline_btn.setFixedHeight(26)
+        self._offline_btn.setMinimumWidth(190)
+        self._offline_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._offline_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._offline_btn.setToolTip(
+            "Force LM Studio locally; click again to return to automatic network detection")
+        self._offline_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: " + C.TEXT_DIM +
+            "; border: 1px solid " + C.BORDER +
+            "; border-radius: 4px; padding: 0 8px; }"
+            "QPushButton:hover { color: " + C.PRI +
+            "; border-color: " + C.PRI_DIM + "; }")
+        self._offline_btn.clicked.connect(self._toggle_offline_mode)
+        lay.addSpacing(8)
+        lay.addWidget(self._offline_btn)
         lay.addStretch()
 
         mid = QVBoxLayout(); mid.setSpacing(1)
@@ -5651,6 +5679,44 @@ class MainWindow(QMainWindow):
             self._quick_drawer.raise_()
         else:
             self._quick_drawer.hide()
+
+    def _toggle_offline_mode(self):
+        if not self.on_offline_toggle:
+            self._log.append_log("SYS: Model routing is not connected yet.")
+            return
+        try:
+            self.on_offline_toggle()
+        except Exception as e:
+            self._log.append_log(f"ERR: Could not change model routing: {e}")
+        self._refresh_offline_button()
+
+    def _refresh_offline_button(self):
+        if not hasattr(self, "_offline_btn"):
+            return
+        try:
+            state = self.offline_get_state() if self.offline_get_state else {}
+        except Exception:
+            state = {}
+        forced = bool(state.get("forced_local"))
+        online = bool(state.get("online", True))
+        if forced:
+            text, tip = ("▣  AI ROUTING: LOCAL (FORCED)",
+                         "LM Studio is forced for this run. Click to return to automatic detection.")
+        elif not online:
+            text, tip = ("▣  AI ROUTING: LOCAL (OFFLINE)",
+                         "No internet connection detected; JARVIS is using LM Studio.")
+        else:
+            text, tip = ("☁  AI ROUTING: GEMINI (AUTO)",
+                         "Online: Gemini. If internet drops, JARVIS switches to LM Studio automatically.")
+        self._offline_btn.setText(text)
+        self._offline_btn.setToolTip(tip)
+        local = forced or not online
+        self._offline_btn.setStyleSheet(
+            "QPushButton { background: " + ("#001a08" if local else "transparent") +
+            "; color: " + (C.GREEN if local else C.TEXT_DIM) +
+            "; border: 1px solid " + (C.GREEN_D if local else C.BORDER) +
+            "; border-radius: 4px; padding: 0 8px; }"
+            "QPushButton:hover { color: " + C.PRI + "; border-color: " + C.PRI_DIM + "; }")
 
     def _toggle_controls(self, checked: bool):
         if checked:
