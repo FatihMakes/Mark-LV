@@ -83,7 +83,25 @@ def discover(kind: str = "") -> list[dict]:
     return [d for d in out if d]
 
 
+def split_id(provider_id: str) -> tuple[str, str]:
+    """"openai_compat@minimax" -> ("openai_compat", "minimax").
+
+    The part after "@" names one service in the provider's catalog, which has
+    settings of its own — see config_manager._upgrade_ids. An id without one is
+    a provider that has no catalog, and its entry is itself."""
+    base, _, entry = (provider_id or "").partition("@")
+    return base, entry or base
+
+
+def catalog_entry(provider_id: str) -> dict:
+    """The catalog row a service id names, or {} for a provider without one."""
+    base, entry = split_id(provider_id)
+    decl = get_declaration(base) or {}
+    return next((e for e in decl.get("catalog") or () if e.get("id") == entry), {})
+
+
 def get_declaration(provider_id: str) -> Optional[dict]:
+    provider_id = split_id(provider_id)[0]
     if provider_id in _declarations:
         return _declarations[provider_id]
     for group in _MODULES.values():
@@ -164,6 +182,14 @@ def missing_fields(provider_id: str, cfg: dict) -> list[str]:
     decl = get_declaration(provider_id)
     if decl is None:
         return []
-    return [f.label for f in decl.get("needs", ())
-            if isinstance(f, Field) and f.required
-            and not str(cfg.get(f.key, "")).strip()]
+    out = [f.label for f in decl.get("needs", ())
+           if isinstance(f, Field) and f.required
+           and not str(cfg.get(f.key, "")).strip()]
+    # The key is optional for the provider — local servers take none — and is
+    # not optional for a hosted service, which refuses every request without
+    # one. Reporting it here keeps a keyless MiniMax off the ladder instead of
+    # spending a round trip on a 401 each time.
+    if (catalog_entry(provider_id).get("local") is False
+            and not str(cfg.get("api_key", "")).strip()):
+        out.append("API key")
+    return out

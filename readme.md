@@ -53,7 +53,7 @@ It's not just an assistant — it's an extension of your digital life.
 | 🌍 Language-Free Mouth | Articulation is derived by Unicode reduction, so Latin, Cyrillic and Greek scripts all work from one rule set — and scripts that hide pronunciation fall back cleanly |
 | 🙂 Facial Acting | Brows track the phrase, gaze saccades between fixations, natural blinking, a small nod on stressed syllables |
 | 😐 Face as Status | Looks away while thinking, meets your eyes while listening, lids fall while asleep, glances down at new content |
-| 🎚️ Push-to-Talk | Hold **Ctrl+Space** and the mic opens — closed the rest of the time. Truly global on Windows, window-scoped elsewhere |
+| 🧚 Push-to-Talk | Hold **Ctrl+Space** and the mic opens — closed the rest of the time. Truly global on Windows, window-scoped elsewhere |
 | 🔇 Self-Echo Guard | Never answers its own last sentence: the tail of its own voice is recognised and dropped without muting you |
 | 🪪 Runtime Self-Knowledge | Name, OS, abilities **and limits** are generated from the live system each session — rename it or add a plugin and it knows |
 | 🎙️ Wake Word | Local **"Hey Jarvis"** detection — sleeps until called, auto-sleeps after 2 min of silence, and never streams audio while asleep |
@@ -73,113 +73,13 @@ It's not just an assistant — it's an extension of your digital life.
 | 🏠 Local & Third-Party Models | Ollama · LM Studio · llama.cpp · vLLM · OpenAI · Groq · DeepSeek · Mistral · xAI · OpenRouter — one setting, because they share a protocol |
 | 🗣️ Local Speech | Whisper on your CPU for hearing, Piper for speaking — **~50 languages**, neural, entirely offline |
 | 🌍 The Voice Follows You | Whisper hears which language you spoke; the answer comes back in that language's voice, switching mid-conversation |
-| 🤫 Reasoning Stays Private | `<think>` blocks from qwen3, deepseek-r1 and their distills are never read aloud |
-| 🎙️ ElevenLabs Voice | One voice that speaks every language, streamed |
-| 🧮 Tool Budget | A small model is given the tools that matter instead of all 45 — core-first, by count and by size |
-| 🎙️ Real-time Voice | Ultra-low latency conversation in any language via Gemini Live API |
-| 🎨 Live Theming | Recolour the entire HUD from a hue wheel or hex — the avatar retints with it |
-| 〰️ Reactive HUD | Waveform pulses to real audio — your mic while listening, JARVIS while speaking |
-| 🎙️ Voice Picker | Choose from 5 native Gemini voices and switch live from the UI — no restart |
-| ♾️ Unlimited Sessions | Sliding-window context compression — one conversation can last for hours |
-| 🖥️ System Control | Launch apps, adjust volume/brightness, WiFi, shortcuts, power — all by voice |
-| 🧩 Autonomous Tasks | High-level planning for complex multi-step goals via agent mode |
-| 👁️ Visual Awareness | Screen capture and webcam vision piped into your main Gemini session, labelled by source |
-| 🧠 Persistent Memory | Deeply remembers projects, preferences, and personal context across sessions |
-| ⌨️ Hybrid Input | Seamlessly switch between keyboard typing and voice commands |
-| 🌅 Morning Briefing | On first boot: greets you, reads the time, recaps yesterday, and fetches live news |
-| 🔔 Proactive 2.0 | Time-aware, context-aware check-ins — knows the time of day, your projects, and what you've been discussing |
-| 🗓️ Session Memory | Summarises each conversation and mentions it naturally next morning — consumed after use, never repeats |
-| 👁️‍🗨️ Background Monitoring | User-configured topic watching — checks for new headlines once a day and alerts naturally |
-| 📊 Hardware Monitoring | Continuous CPU, RAM, GPU and temperature telemetry with localized voice alerts |
-| 🌤️ Weather Report | Live weather data for your city, personalized from memory |
-| 🗺️ Dynamic Content Panel | Scrollable display layer beneath the HUD that renders web results, news, and search data |
-| 🔍 Multi-Mode Web Search | `news` / `research` / `price` / `compare` / `search` — Gemini Grounded first, DDG fallback |
-| ⏰ Smart Reminders | OS-native scheduled notifications (Windows Task Scheduler / macOS LaunchAgent / Linux systemd) |
-| 📂 File Processor | Read, summarize, and answer questions about local files |
-| 🌐 Browser Control | Open URLs, navigate tabs, and interact with the browser by voice |
-| 📨 Send Message | Compose and send messages through WhatsApp, Telegram, and more |
-| 🖱️ Desktop Control | Taskbar, window management, and desktop-level operations |
-| 🧑‍💻 Silent Language Memory | Detects spoken language on first use — all future sessions adapt automatically |
-| 📱 Remote Dashboard | Control the assistant from your phone via QR code pairing |
-| ⚡ Auto-Start on Boot | Registers with the OS startup system (registry / LaunchAgent / .desktop) |
-| 📋 Clipboard Intelligence | Copy any text → floating panel with Translate / Summarise / Explain / Fix |
-| 🤝 It Says What It Checked | Every tool answers `done` / `unverified` / `failed` — a request that could not be confirmed is never spoken as a success |
-| 🚪 Close an App by Name | Matched against what is running, asked politely so unsaved work survives, and the assistant's own processes are never a target |
-| 🪟 Raise, Don't Duplicate | Opening something already running brings its window to the front instead of starting a second copy |
-| 🛡️ Untrusted Content Boundary | Web pages and documents reach the model wrapped as data — an instruction inside one is reported, not obeyed |
-| 🐧 Platform Honesty | On Wayland, or a macOS without permissions, it says what this session will not let it do instead of narrating a click that never happened |
-| 🎚️ Per-Device Volume | The output slider belongs to the speaker you picked, not to whatever the system calls default |
-| 🎤 Prove It Hears You | A TEST button with a live meter — the one check an automated probe on silence can never make |
-| 🪪 Assistant Customization | Change the assistant name, your name, voice, and colour from the UI — takes effect immediately |
-
----
-
-## 🆕 What's New in Mark LVI
-
-**Nothing new is installed by default.** Talking to a model — local or hosted — uses `httpx`, which already ships with `google-genai`. The system's own voices need no Python package at all. Local speech recognition (`faster-whisper`) and the neural voice (`piper-tts`) are one-click installs from inside the panel, and are deliberately absent from `requirements.txt`: a fresh clone that only ever uses Gemini should not download several hundred megabytes for a feature it will not open.
-
-### The choice
-
-#### 🔌 One panel, four decisions
-⚙ → **ENGINE & PROVIDERS** asks what should hold the conversation, and if the answer is "my own stack", which three parts make it up:
-
-| | |
-|---|---|
-| **① Hearing** | Whisper on this machine (CPU), or a transcription API |
-| **② Thinking** | Anything serving `/v1/chat/completions` — local or hosted |
-| **③ Speaking** | Piper — a neural voice in ~50 languages, on this machine — your system's own voices, or ElevenLabs |
-
-Each part has a **TEST** button that connects, measures and reports in a sentence — *"Answered in 0.36s"*, *"Nothing answered at that address — is the server running?"*, *"No model called 'qwen3:9b' at that address."* Setting this up without one means guessing which of four things is wrong.
-
-**The form is generated.** Every field comes from the provider's own declaration, so adding a provider is one file in `providers/` and the interface does not change — the same promise the plugin system makes about skills.
-
-#### 🧠 Side calls can leave Gemini without the voice leaving it
-The assistant makes requests of its own — reading a document, working out what is on screen, writing code, parsing a page. Nineteen of them, across fifteen files.
-
-They come out of Gemini's **text** quota, which is a different pool from the conversation's, and on the free tier it is the text pool that empties first. When it does, the voice keeps working and everything else silently stops.
-
-Those calls can now fall back to another model on their own — the conversation, the latency and the voice completely unchanged. It is the cheapest useful thing in this release and it takes one dropdown.
-
-#### 🌍 A voice in about fifty languages, on your own machine
-
-This project is used in many languages, and for a while local mode was not. The two voices it shipped with each gave up something it cannot afford:
-
-The **system voice** speaks only the languages the machine has voices installed for. Measured on an ordinary Windows 10 install: two, both English. A Turkish sentence came out as English phonetics; a Russian one came out as *silence, with a success code*. **ElevenLabs** speaks every language beautifully and needs an account, a key, and a working connection for every sentence.
-
-**Piper** needs a download the first time and nothing at all afterwards. Measured here, Turkish, on the CPU:
-
-| | |
-|---|---|
-| download | 5.0s — 63 MB, once per voice |
-| load | 2.4s — once per session, at connect |
-| synthesis | **0.34s for 5.15s of speech — 15× faster than real time** |
-
-Fifteen times real time on a CPU is the number that makes this the default rather than the fallback: the voice is never what you are waiting for. **176 voices, 52 languages** — including Turkish, Kurdish, Arabic, Persian, Russian, Chinese, Japanese, Hindi, Swahili, Ukrainian and Greek.
-
-#### 🗣️ The voice follows the language you speak, without guessing at it
-
-A Piper voice is trained for one language, so a multilingual assistant has to know which to use. Detecting that from the text would mean a language detector — another dependency, and an unreliable one on sentences as short as an assistant's.
-
-**It was already known and being thrown away.** Whisper reports the language of what you said as part of the recognition it has just done, and the assistant answers in the language it was addressed in. So that code is passed down the pipeline and the voice for it is used:
-
-```
-[TR] heard 'Sistemin durumu nedir acaba?'      -> tr -> tr_TR-dfki-medium
-[EN] heard 'What is the current system status?' -> en -> en_US-lessac-medium
-```
-
-Switch language mid-conversation and the voice switches with you. No detection, no dependency, no guess — just information the pipeline was already holding.
-
-Only voices already on disk are considered: fetching sixty megabytes in the middle of a sentence would be a worse failure than the wrong accent. Choosing a voice in the panel downloads it there and then, and the connect warm-up fetches anything still missing before you have spoken.
-
-#### 🤫 A reasoning model's thinking is not read out loud
-
-The models people actually run at home — qwen3, deepseek-r1 and every distill of them — think inside `<think>…</think>` before answering, and several servers pass that through as ordinary content. Without a filter the assistant reads its own reasoning aloud: half a minute of *"the user is greeting me, I should respond warmly, let me consider…"* spoken in full, before the greeting. It also lands in the log, the session summary and the conversation history, where it costs context on every later turn.
+| 🤫 Reasoning Stays Private | `` before answering, and several servers pass that through as ordinary content. Without a filter the assistant reads its own reasoning aloud: half a minute of *"the user is greeting you, you should acknowledge warmly..."* spoken in full, before the greeting. It also lands in the log, the session summary and the conversation history, where it costs context on every later turn.
 
 It is filtered on the stream rather than with a pattern, because a tag is regularly split across two chunks — `"<thi"` then `"nk>"`. Tested against two hundred random chunk boundaries.
 
-#### ⏹ "open whatsapp" opened WhatsApp four times
+#### 🛑 "open whatsapp" opened WhatsApp four times
 
-Gemini Live ends a turn itself. A chat API does not: every tool result is a fresh request, and if the model answers it with the same tool call again, the loop has no floor. The tool worked, returned *"Opened WhatsApp"*, and a small model asked for it again rather than replying — launching the application on top of the copy already running, four times.
+Gemini Live ends a turn itself. A chat API does not: every tool result is a fresh request, and if the model answers it with the same tool call again, the loop has no floor. The tool worked, returned *"Opened WhatsApp"*, and a small model asked for it again rather than replying — launching the application on top of the copy already running.
 
 Two limits, because they catch different faults. A **repeated** call means the model did not understand the result it got, and re-running the tool is actively harmful — so it is answered from what the tool already returned and never reaches the application twice. A long chain of **different** calls is a model wandering: not harmful, not converging either, so it is capped and the model is told to answer with what it has.
 
@@ -200,22 +100,19 @@ The first version of the settings read the config file on every call — measure
 #### ⏱ The first thing you ever say took 8.9 seconds
 Loading the speech model is 1.4s. The **first transcription after that is 8.5s**, and every one after it is 1.1s — it is the recogniser bringing up its kernels, not the load. That was paid by whatever the user said first, which is the worst possible moment: a person who waits eight seconds concludes it is broken and says it again, and now two turns overlap.
 
-The warm-up now runs a throwaway recognition on a tenth of a second of silence before anyone speaks. **8.92s → 1.16s**, and the warm-up itself costs 1.08s of a moment nobody is waiting.
+The warm-up now runs a throwaway recognition on a tenth of a second of silence before anyone speaks. **8.92s → 1.16s**, and the warm-up itself costs 1.08s of a moment nobody is waiting for.
 
 #### 🔇 A system voice given a script it does not have returns success and silence
-Measured on an ordinary Windows 10 install: two voices, both English. A Turkish sentence came out as English phonetics — poor, but audible. A **Russian sentence produced zero bytes, with a success code.** Silence that reports success is the worst failure there is: the assistant looks like it ignored you, and the suspicion falls on your speakers. It is now an error that names the cause and says what to do about it.
+Measured on an ordinary Windows 10 install: two voices, both English. A Turkish sentence came out as English phonetics — poor, but audible. A **Russian sentence produced zero bytes, with a success code.** Silence that reports success is the worst failure there is: the assistant looks like it ignored you, and the suspicion falls on its speakers. It is now an error that names the cause and says what to do about it.
 
 #### 🈚 A whole Japanese paragraph was synthesised as one block
 The sentence splitter required whitespace after the full stop. Japanese and Chinese do not put one after `。`, so nothing ever split. Two rules now: after `.!?` a space is required, or every version number becomes two sentences; after `。！？؟۔।` it is not.
 
 #### 🧮 A default that only reaches new installs is not a default
-The tool budget below was added as a preset value, applied when a service is
-**picked** in the panel. Anybody who had already set up Ollama never received
-it — measured on such an install, 20 tools and 18,039 characters on every turn
-instead of 14 and 11,871. Most of a fourteen-second wait for the first word.
+The tool budget below was added as a preset value, applied when a service is **picked** in the panel. Anybody who had already set up Ollama never received it — measured on such an install, 20 tools and 18,039 characters on every turn instead of 14 and 11,871. Most of a fourteen-second wait for the first word.
 
 It is a property of the endpoint now: a model on your own hardware — loopback or
-a private address, because "my own model" often means the desktop in the next
+a private address, because "your own model" often means the desktop in the next
 room — gets the budget unless you set one yourself. A hosted endpoint never
 does.
 
@@ -234,19 +131,19 @@ And a proxy set for the whole machine is **not** used to reach that same machine
 #### 🚪 The new engine speaks the old engine's language
 `main.py` touches its session through exactly four methods and reads five fields off the events. That is the entire contract, so a local pipeline that implements those four is invisible to everything upstream — the avatar, the mouth, the echo guard, the tool dispatcher, memory, undo and every action and plugin work unchanged, with nothing added to any of them.
 
-The alternative was inventing a neutral interface and translating both sides onto it, which means rewriting eight thousand lines that already work so that a folder you might delete can feel symmetrical. The new thing adapts to the old thing, because the old thing is the one with the users.
+The alternative was inventing a neutral interface and translating each side onto it, which means rewriting eight thousand lines of code that already work so a folder you might delete can feel symmetrical. The new thing adapts to the old thing, because the old thing is the one the users have.
 
 > **The deadlock this avoided:** `main.py` answers a tool call from *inside* its loop over `receive()`. An engine that waited there for the generation it triggers would be waiting for events only that loop can consume — the turn would stop dead on the first tool call and look exactly like a hung model. Every send method records, schedules, and returns.
 
 #### 👁️ An engine that cannot see is not given eyes
 Each engine declares what it can do, and that declaration feeds two things that already existed: the tool list, and `_describe_limits`. A text-only model is never offered `screen_process` — and is *told* it cannot see, so it says so instead of describing a screen it never received. No special case anywhere; runtime self-knowledge was built for exactly this shape of problem.
 
-#### ⏹ Something has to decide when you stopped talking
-Gemini Live decides that on the server. Nothing does locally, so with **push-to-talk** the key release is the signal, and without it the engine finds it in the audio: the noise floor is measured continuously — fast downward, slow upward — speech is what stands 3.5× above it, and 700 ms of quiet ends the turn. Energy, not a model: a neural detector would be better, and would also be a second download, a second warm-up and a second thing that behaves differently on each platform.
+#### 🛑 Something has to decide when you stopped talking
+Gemini Live decides that on the server. Nothing does locally, so with **push-to-talk** the key release is the signal, and without it the engine finds it in the audio: the noise floor is measured continuously — fast downward, slow upward — speech is what stands 3.5× above it, and 700 ms of quiet ends the turn. Energy, not a model: a neural detector would be better, but it would also be a second download, a second warm-up and a second thing that behaves differently on each platform.
 
 ### ⚖️ What local mode is, and what it is not
 
-It is **not faster.** Gemini Live answers in roughly 0.3–0.6s because there is no separate recognition step, no separate synthesis step and no round trip to find the end of a turn. A local pipeline has all three, in series — 1.5–4s on ordinary hardware — and a turn that calls a tool costs **two** model round trips instead of one, because a stateless chat API has to be asked again with the result.
+It is **not faster.** Gemini Live answers in roughly 0.3–0.6s because it has no separate recognition step, no separate synthesis step and no round trip to find the end of a turn. A local pipeline has all three, in series — 1.5–4s on ordinary hardware — and a turn that calls a tool costs **two** model round trips instead of one, because a stateless chat API has to be asked again with the result.
 
 It also gives up barge-in, server-side turn detection, proactive audio and session resumption.
 
@@ -254,7 +151,7 @@ It keeps tools, memory, the avatar, lip-sync, undo and the confirmation gate. An
 
 ### 🤝 It stopped saying it had done things it had not done
 
-`open_app` answered **"Opened Spotify."** whenever its launcher returned — and on Windows that launcher returned the instant a *shell* started, not when an application did. A misspelling, an app that was never installed, an installer that moved: every one produced a confident success, said out loud, while nothing appeared on screen. That is worse than an error, because an error is something you can act on and a false success sends you looking for the window.
+`open_app` answered **"Opened Spotify."** whenever its launcher returned — and on Windows that launcher returned the instant a *shell* started, not when an application did. A misspelling, an app that was never installed, an installer that moved: every one produced a confident success, said out loud, while nothing appeared on screen. That is worse than an error, because an error is something a user can act on and a false success sends them looking for the window.
 
 Every tool that drives the computer now answers in one of five words, and the model is told what each may and may not be spoken as:
 
@@ -268,7 +165,7 @@ Every tool that drives the computer now answers in one of five words, and the mo
 
 The evidence is real work, not a longer sentence. Opening an application watches the process table for a new process answering to the name. Setting the volume reads it back. Setting the wallpaper reads it back. Sending on WhatsApp goes through the driver that proves the conversation is the right person's. Where nothing can be read back — a keystroke typed blind into Telegram — it says `unverified`, and the assistant tells you it cannot confirm, which is true.
 
-> The shape came from `whatsapp_call.py` and `whatsapp_guard.py`, which reached it by hand after a real message was reported as sent when nothing had gone. The comment there is the whole argument: *"A tool that reports only its successes is an invitation to invent the rest."*
+> The shape came from `whatsapp_call.py` and `whatsapp_guard.py`, which reached it by hand after a real message was reported as sent when nothing had gone. The comment there is the whole argument: *"a tool that reports only its successes is an invitation to invent the rest."*
 
 ### 🚪 "Close the app" closed JARVIS
 
@@ -281,11 +178,11 @@ else:               pyautogui.hotkey("alt", "f4")
 
 It sent the quit chord to **whatever window had focus** — and while somebody is talking to the assistant, the window with focus is very often the assistant. It also returned nothing at all, so the model announced a success it had no information about.
 
-It could not be fixed by aiming better: "the focused window" is the wrong idea. The user names an application, so the application is what has to be found. Closing now matches against what is actually **running**, refuses the assistant's own processes, asks the application politely — WM_CLOSE on Windows, SIGTERM elsewhere, so unsaved work gets its dialog — and never escalates to a kill.
+It could not be fixed by aiming better: "the focused window" is the wrong idea. The user names an application, so the application is what is to be found. Closing now matches against what is actually **running**, refuses the assistant's own processes, asks the application politely — WM_CLOSE on Windows, SIGTERM elsewhere, so unsaved work gets its dialog — and never escalates to a kill.
 
 **The guard is three layers deep on purpose.** The first two ask the ranking and the process-tree map, and both are built from readings that can fail. The third asks a question with no moving parts: is this running the same executable I am? It needs no cache, no scan and no tree walk. Overlapping guards on a function that ends processes is not redundancy to tidy away later — there is no undo for closing the wrong thing.
 
-> The tree walk alone was not enough, and finding that out cost something. A modern desktop application is not a chain, it is a **tree of siblings** sharing one executable: tested against a running Electron app, the chain protected the two processes above and closed thirteen beside them. Executable identity is the question that answers correctly on every operating system without knowing a single application's name.
+> The tree walk alone was not enough, and finding that out cost something. A modern desktop application is not a chain of processes sharing one executable: tested against a running Electron app, the chain protected the two processes above and closed thirteen beside them. Executable identity is the question that answers correctly on every operating system without knowing a single application's name.
 
 ### 🪟 Opening something already open now brings it to the front
 
@@ -293,7 +190,7 @@ It could not be fixed by aiming better: "the focused window" is the wrong idea. 
 
 It raises the window now, the way clicking a taskbar icon does. Two details that only show up in use: Windows refuses to let a background process take the foreground, so the standard input-queue attach is used when the plain call is refused; and a Store app's window belongs to another process entirely, so when no window can be raised it falls through to launching, which is what brings back an app that is only in the tray.
 
-**Short names no longer match the wrong program.** "wp" matched the running `wps.exe`, and the assistant reported WPS Office as WhatsApp. Two letters are a prefix of far too much, so anything under four characters must now match exactly.
+**Short names no longer match the wrong program.** "wp" matched the running "wps.exe", and the assistant reported WPS Office as WhatsApp. Two letters are a prefix of way too much, so anything under four characters must now match exactly.
 
 ### 🛡️ Content from outside is marked as content from outside
 
@@ -311,7 +208,7 @@ They are gone, and what replaced them is better than a translation: the rules no
 
 ### 🐧 What Wayland does not allow, said out loud
 
-"It doesn't work properly on Linux" was reported for a long time without anybody being able to name the failing part. It is the same answer on macOS, and it is not a bug in any one file.
+"It doesn't work properly on Linux" was reported a lot of times without anybody being able to name the failing part. It is the same answer on macOS, and it is not a bug in one file.
 
 Wayland — the default session on Ubuntu 22.04 and later, on Fedora, and on current GNOME and KDE — does not let one program type, click, capture the screen or raise another program's window. That was the security hole it was designed to close. macOS refuses the same things until Accessibility and Screen Recording are granted. And on both, **the calls report success and have no effect**, which is the worst possible failure: the assistant says it clicked, and nothing moved.
 
@@ -337,7 +234,7 @@ certificate as an attack. Chrome shows a full-page interstitial. A QR scanner
 that opens links in its own in-app browser often shows a blank page and offers
 no way through at all, because those views have no "Advanced" button by design.
 
-A dashboard nobody can reach is not a more secure product than one they can. So
+A dashboard nobody can reach is not a more secure product than one they can.
 HTTPS is opt-in — `"dashboard_https": true` in `config/api_keys.json`, and the
 certificate is generated for you — and everything else that actually guards the
 door stayed:
@@ -410,11 +307,11 @@ Nothing is removed to get there. And `tier` — the per-file override that decid
 
 
 * **`open_app` was a command injection.** `shutil.which(name.split(".")[0])` accepted `"notepad.exe & whoami"` because `which("notepad")` succeeds, and the whole string then went to a shell unquoted. Verified before it was changed; there is no shell on any launch path now.
-* **`desktop_control` asked a model to write Python and ran it.** The rules — "NO subprocess", "NO file deletion", "NO imports" — were sentences in a *prompt*, with nothing enforcing them, while the namespace handed the generated code `getattr`, the real `pathlib.Path`, `pyautogui` and `ctypes`. From inside it, `subprocess.Popen` was one line away. It was also the only tool in the project that broke the project's own architecture: every other one declares typed parameters and lets the model fill them in. Removed — and nothing was lost, because typing and clicking are `computer_control`, multi-step screen work is `screen_agent`, and files are `file_controller`.
+* **`desktop_control` asked a model to write Python and ran it.** The rules — "NO subprocess", "NO file deletion", "NO imports" — were sentences in a *prompt*, with nothing enforcing them, while the namespace handed the generated code `getattr`, the real `pathlib.Path`, `pyautogui` and `ctypes`. From inside it, `subprocess.Popen` was one line away. It was also the only tool in the project that broke the project's own architecture: every other one declares typed parameters and lets the model fill them in. Removed — and nothing was lost, because typing and clicking is `computer_control`, multi-step screen work is `screen_agent`, and files are `file_controller`.
 * **The screen agent crashed on every machine without Pillow.** `import mss.tools` inside a function made `mss` local to that whole function, so a line five above it read a local that had not been assigned yet: *"cannot access local variable 'mss'"*. It only fired on the branch Pillow's absence selected, which is why it looked intermittent.
 * **The voice changed accent at random.** Whisper reports a language for every utterance and is confident about all of them, including "ok", "hmm" and "thanks" — and the voice followed. `language_probability` was on the same object and was being thrown away. A switch now needs both confidence and enough words; a one-word reply keeps the language it was already speaking.
 * **Chrome opened twice, on a profile with none of your sign-ins.** Asking to open a web page called `open_app` for the browser and `browser_control` after it. Both descriptions now say the second one opens the browser itself.
-* **A locked Chrome profile cost 25 seconds of silence.** A profile can only be open once, so with the browser already running the launch sat on its timeout before falling back to a profile the user is signed into nothing on — and said nothing about it. Whether the browser is running is a question the process table answers in 150 ms, and the answer is now reported.
+* **A locked Chrome profile cost 25 seconds of silence.** A profile can only be opened once, so with the browser already running the launch sat on its timeout before falling back to a profile the user was signed into nothing on — and said nothing about it. Whether the browser is running is a question the process table answers in 150 ms, and the answer is now reported.
 * **A process whose executable path could not be read was not recognised as the assistant's own.** Self-protection compared full paths, and a path comes back empty for a process that is exiting or that the OS will not inspect — so a `python.exe` belonging to this very application could become a candidate for closing. The name is compared when the path cannot be, and a process that vanishes before it can be touched is no longer reported as one this tool closed.
 * Search results and file contents were shown to the user with their untrusted markers still attached. Those markers are for the model.
 * The activity log filled with tool status lines. It carries the conversation and problems; the running commentary belongs in the terminal.
@@ -430,7 +327,7 @@ Nothing is removed to get there. And `tier` — the per-file override that decid
 * An emoji was **read out by name**: "How can I help? 😊" became "…smiling face with smiling eyes". Removed on the way to the voice only — it stays in the log, because the model did write it. The first attempt used the emoji range everybody copies, U+24C2–U+1F251, which spans all of CJK and deleted a Japanese sentence outright; the ranges are narrow now and nine scripts are tested.
 * A reasoning model's `<think>` block was read aloud in full before the answer. Filtered on the stream, because the tags arrive split across chunks.
 * **"open whatsapp" opened WhatsApp four times.** A chat API ends no turn by itself: the tool returned, the model asked for it again, and every repeat launched the app on top of the copy already running. A repeated call is now answered from what the tool already returned and never reaches the application twice.
-* A background GPU alert appeared in the log as though the user had said it — *"You: heyyy open whatsapp [SYSTEM_ALERT] GPU load is at 96%…"* — and, worse, **cancelled the answer in progress** and replaced it with a reply about the graphics card. Injected text is no longer a transcript, and it waits its turn instead of destroying one.
+* A background GPU alert appeared in the log as though the user had said it — *"Heyyyy open whatsapp [SYSTEM_ALERT] GPU load is at 96%…"* — and, worse, **cancelled the answer in progress** and replaced it with a reply about the graphics card. Injected text is no longer a transcript, and it waits its turn instead of destroying one.
 * A voice chosen in the panel was never fetched, so the assistant had no voice at all until somebody pressed TEST. Choosing a voice is the request to use it: it downloads on selection, and again at connect if it is still missing.
 * Loading a neural voice holds the GIL for a measured 2.4 seconds, which stalled the interface on the first sentence. Both the voice and the speech model are warmed at connect, in parallel.
 
@@ -443,16 +340,16 @@ One new dependency for the whole release — `yt-dlp`, and only to turn a YouTub
 ### The display
 
 #### 📺 Video where the face is
-The HUD already had a surface that takes the centre of the screen and gives it back: the camera. Video shares that same stack, so the avatar, the live camera and a video can never be on screen at once — and a video always lands exactly where you are already looking.
+The HUD already had a surface that takes the centre of the screen and gives it back: the camera. Video shares that same stack, so the avatar, the live camera and a video can never be on screen at the same time — and a video always lands exactly where you are already looking.
 
-It accepts **a local file, a direct media URL, a YouTube link, or just a description** ("play the new Dune trailer") and searches for it. It **starts muted every time**, because a soundtrack talking over the assistant is the one way this feature could make JARVIS worse rather than better. You turn the sound on by asking, or from the button in the video header.
+It accepts **a local file, a direct media URL, a YouTube link, or just a description** ("play the new Dune trailer") and searches for it. It **starts muted every time**, because a soundtrack playing over the assistant is the one thing that could make JARVIS worse rather than better. You turn the sound on by asking, or from the button in the video header.
 
-**It answers before it opens.** Resolving what to play takes seconds nothing can remove — measured at 2.0s for a link and 3.3s for a spoken phrase, plus buffering. Restricting yt-dlp to a lighter client was tried and made it worse: the fast clients came back with zero usable formats. So the seconds stay, and what changed is where you spend them — listening to JARVIS say it is coming, instead of watching nothing happen. Say "stop" during those seconds and the video is cancelled before it ever reaches the screen.
+**It answers before it opens.** Resolving what to play takes seconds nothing can remove — measured at 2.0s for a link and 3.3s for a spoken phrase, plus buffering. Restricting yt-dlp to a lighter client was tried and made it worse: the fast clients returned no playable data. So the seconds stay, and what changed is where you spend them — listening to JARVIS say it is coming, instead of watching nothing happen. Say "stop" during those seconds and the video is cancelled before it ever reaches the screen.
 
 #### 🔀 Two streams, one picture
-The first version asked YouTube for a format carrying both picture and sound and got *"Requested format is not available"*. That was not a bad selector; it was a wrong assumption. Checked against three videos — including the oldest upload on the site — **every one offered zero combined formats.** Picture and sound are separate streams now.
+The first version asked YouTube for a format carrying both video and audio and got *"Requested format is not available"*. That was not a bad selector; it was a wrong assumption. Checked against three videos — including the oldest upload on the site — **every one offered zero usable formats.** Video and audio are separate streams now.
 
-So there are two players running together, with a timer that corrects any drift over 300 ms. And the audio track is chosen on **language first, bitrate second** — because YouTube auto-dubs a great many videos and ships every dub at the *same* bitrate as the original: measured on one video, English at 129.483 and Arabic, Bangla, German, Spanish, French, Hindi and Indonesian all at 129.482. Sorting on bitrate alone came down to a thousandth of a kilobit, so the same video would play in Arabic one time and English the next for no reason you could see. It now reads YouTube's own original-track marker first.
+So there are two players running together, with a timer that corrects any drift over 300 ms. And the audio track is chosen on **language first, bitrate second** — because YouTube auto-dubs a great many videos and ships every dub at the *same* bitrate as the original: measured on one video, English at 129.483 and Arabic, Swahili, German, French, Hindi and Japanese all at 129.482. Sorting on bitrate alone came down to a thousandth of a kilobyte, so the same video would play in English one time and Japanese another. It now reads YouTube's own original-track marker first.
 
 #### 🔇 It stopped hearing the film
 The microphone is open while a video plays, so the moment you turn the sound on, JARVIS starts answering the film. The mic now mutes itself when the video's sound goes on and unmutes when it goes off — and it says so in the activity log rather than going deaf silently.
@@ -467,7 +364,7 @@ The panel used to stutter when it opened, and the obvious explanation — too ma
 ### Staying up
 
 #### 🪜 Every Gemini model, in one ladder
-Every one-shot Gemini call in the app now goes through `core/gemini.py`. Before this, **sixteen files named their own model — twenty-six times — and not one of them set a timeout.** When a single alias went unwell, the call did not fail; it hung.
+Every one-shot Gemini call in the app now goes through `core/gemini.py`. Before that, **sixteen files named their own model — twenty-six times — and not one of them set a timeout.** When a single alias went unwell, the call did not fail; it hung.
 
 The ladder is nine models deep, ordered by **measurement rather than guesswork**:
 
@@ -479,7 +376,7 @@ The ladder is nine models deep, ordered by **measurement rather than guesswork**
 | `gemini-3-flash-preview` | 504 after 14.7s | `gemini-3.6-flash` | 504 after 12.0s |
 | `gemini-flash-latest` | 503 UNAVAILABLE | | |
 
-The three that fail were **not deleted** — a model that is unwell today is a real rung tomorrow. They sit at the bottom, and a **cooldown** decides how long a failure is believed:
+The three that failed were **not deleted** — a model that is unwell today is a real rung tomorrow. They sit at the bottom, and a **cooldown** decides how long a failure is believed:
 
 | What happened | Rested for | Why |
 |---|---|---|
@@ -503,7 +400,7 @@ This is not only tidiness. Every bundled skill is declared to the model on **eve
 **Nothing was deleted.** The five moved to `plugins/`, where they still ship and still work — a plugin is loaded the same way, gets the same HUD and the same undo, and can be removed by deleting one file. The rule the two folders now divide on is what a skill is FOR: `actions/` drives this computer, `plugins/` is everything else. That is why the game updater, the calorie counter and the pushup counter are still here, one directory across.
 
 ### 🩹 Fixes
-* An unanswering model was retried on **every call**, at 12–15 seconds a time, because only quota and 404 failures were ever cooled down. 503/504 now rest for 30 minutes — **11.2 seconds saved per call**.
+* An unanswering model was retried on **every** call, at 12–15 seconds a time, because only quota and 404 failures were ever cooled down. 503/504 now rest for 30 minutes — **11.2 seconds saved per call**.
 * One-shot Gemini calls had **no timeout anywhere**, in any of the sixteen files that made them. Every call now carries a deadline of at least 10 seconds.
 * YouTube playback failed outright with *"Requested format is not available"* — it was asking for a combined stream that no longer exists.
 * Videos played in a **random language**, because YouTube's auto-dubs carry the same bitrate as the original track.
@@ -534,9 +431,9 @@ Storage and prompt budget are now separate problems:
 * **The prompt carries a core, not a dump.** Identity in full, then the most recently updated facts, budgeted — measured at **971 characters on a memory holding 62 stored facts.** That is *smaller* than the old whole-store cap, so sessions now connect with fewer tokens than before.
 * **The rest is fetched on demand.** A `recall_memory` tool searches the full store locally — no network, no second model, well under a millisecond.
 
-The part that is easy to get wrong: **a model cannot look something up if it doesn't know the thing exists.** So the prompt also carries an **index of the keys** it had no room for. Without it, "who is Ayşe?" gets "I don't know" while `ayse_sister` sits on disk unread. That index interleaves categories rather than sorting by recency — sorted like the core, a memory with forty preferences pushed the one entry the index existed for off the end.
+The part that is easy to get wrong: **a model cannot look something up if it doesn't know the thing exists.** So the prompt also carries an **index of the keys** it had no room for. Without that, "who is Ayşe?" gets "I don't know" while `ayse_sister` sits on disk unread. This index interleaves categories rather than sorting by recency — sorting like the core, a memory with forty preferences pushed the one entry the index existed for off the end.
 
-⚙ → **🧠 MEMORY** shows every stored fact, when it was learned, and a ✕ to forget it. Everything stays in `memory/long_term.json` on your machine.
+⚙ → **🧠 MEMORY** shows every stored fact, when it was learned, and an ✕ to forget it. Everything stays in `memory/long_term.json` on your machine.
 
 ### ↩️ Undo — it can take back what it did
 
@@ -553,9 +450,9 @@ Three things it deliberately does *not* do:
 
 * **It does not guess.** Settings undo reads the current value *before* changing it. Where a platform won't report that value, nothing is registered — an undo that restores a guess is worse than no undo.
 * **It does not hoard.** Undoing a write means keeping the old contents in memory, so files over 1 MB are excluded and it says so rather than holding a 200 MB log for the session.
-* **It does not delete your files to undo a copy.** The reverse of a copy is removing the copy; the reverse of "create a folder" is removing it *only while it's still empty*.
+* **It does not delete your files to undo a copy.** The reverse of a copy is removing the copy; the reverse of "create a folder" is removing it *only while it is still empty*.
 
-`organize_desktop` gets special treatment — one command that moves dozens of files, which made it the least reversible thing the assistant could do. It journals every move and puts all of them back in one go, cleaning up the folders it created if they're still empty.
+`organize_desktop` gets special treatment — one command that moves dozens of files, which made it the least reversible thing the assistant could do. It journals every move and puts them all back in one go, cleaning up the folders it created if they're still empty.
 
 **Undo costs nothing at runtime.** It appends a closure to a list; nothing in it runs unless you ask.
 
@@ -568,46 +465,47 @@ if action in _DANGEROUS_ACTIONS:            # {"restart", "shutdown"}
     confirmed = str(params.get("confirmed", "")).lower()
 ```
 
-`confirmed` is a **tool parameter, which means the model fills it in.** Nothing stopped it sending `confirmed=yes` on the first call and nothing checked that a human was ever involved. It was a convention, not a gate. And its coverage was two actions — so `toggle_wifi`, which cuts the assistant's own connection to the Live API and therefore *cannot be asked to undo itself*, went through with no gate at all.
+A **tool parameter, which means the model fills it in.** Nothing stopped it sending `confirmed=yes` on the first call and nothing checked that a human had been involved. It was a convention, not a gate. And its coverage was two actions — so `toggle_wifi`, which cuts the assistant's own connection to the Live API and therefore *cannot be asked to undo itself*, went through with no gate at all.
 
-The token is now issued by the interface. Shutdown, restart and WiFi put a banner on the HUD and **return immediately**; the action runs only if you press CONFIRM. Nothing blocks — JARVIS keeps talking while the banner is up — so this is **cheaper than the old gate**, which burned two tool round trips on every power command.
+The token is now issued by the interface. Shutdown, restart and WiFi put a banner on the HUD and **return immediately**; the action runs only if you press CONFIRM. Nothing blocks — JARVIS keeps talking while the banner is up — so this is **cheaper** than the old gate, which burned two tool round trips for every power command.
 
-> The split between the two mechanisms is about reversibility, not about how alarming a word sounds. Anything undoable is done at once; only the genuinely irreversible asks. An assistant that checks with you before turning the volume down is one you stop talking to.
+> The split between the two mechanisms is about reversibility, not about how alarming a word sounds. Anything undoable is done at once; only the genuinely irreversible asks. An assistant that checks with you before turning the volume down is one nobody uses.
 
 ### 🎧 It finally asks which microphone
 
-Both audio streams opened with no device argument at all, so they always took whatever the OS called "default" — and on Windows that *moves on its own* the moment you plug a headset in. "JARVIS can't hear me" almost always meant "JARVIS is listening to the webcam".
+Both audio streams opened with no device argument at all, so they always took whatever the OS called "default" — and on Windows that **moves on its own** the moment you plug in a headset in. "JARVIS can't hear me" almost always meant "JARVIS is listening to the webcam".
 
 ⚙ → **🎧 AUDIO DEVICES** lets you pick the microphone and the speakers by name. Two things matter more than the dropdown:
 
-**The list is short.** `query_devices()` returns one entry per *device × host API*, not per device — measured on an ordinary Windows machine, **41 entries for what the sound settings show as 4 microphones and 4 speakers.** The same microphone appears four times, under MME, DirectSound, WASAPI and WDM-KS, with nothing to say which is which. That is not a choice, it's a quiz. The picker takes one host API per direction, drops the "Sound Mapper" and "Primary Sound Driver" pseudo-devices that just mean "default", and deduplicates. **41 → 8.**
+**The list is short.** `query_devices()` returns one entry per *device × host API*, not per device — measured on an ordinary Windows machine, **41 entries for what the sound settings show as 4 microphones and 4 speakers.** The same microphone appears four times, under MME, DirectSound, WASAPI and WDM-KS, with nothing to say which is which. This is not a choice, it's a quiz. The picker takes one host API per direction, drops the "Sound Mapper" and "Primary Sound Driver" pseudo-devices that just mean "default", and deduplicates. **41 → 8.**
 
-**Every entry has been measured, not assumed.** The obvious approach is to pick the host API with the nicest names — WASAPI on Windows, which in shared mode **doesn't resample**, so with 16 kHz in and 24 kHz out against 48 kHz hardware every open failed. Adding a rate check and moving to DirectSound passes that test on both sides, and PortAudio's DirectSound **output is a silent sink**: the stream opens, every write returns success in ~0 ms, and not one sample reaches the speakers.
+**Every entry has been measured, not assumed.** The obvious approach is to pick the host API with the nicest names — WASAPI on Windows, which in shared mode **doesn't resample**, so with 16 kB in and 24 kB out against 48 kB hardware every open failed. Adding a rate check and switching to DirectSound passes that test on both sides, and PortAudio's DirectSound **output is a silent sink**: the stream opens, every write returns success in ~0 ms, and not one sample reaches the speakers.
 
 | | write(2.0 s) took | |
 |---|---|---|
 | MME | **2.02 s** | consumed in real time |
 | DirectSound | **0.00 s** | swallowed instantly |
 
-No capability flag reports that. So the app measures it — once per host API per direction, on a background thread at startup, using silence. Two consequences worth stating plainly:
+No capability flag reports this. So the app measures it — once per host API per direction, on a background thread at startup, using silence. Two consequences worth stating plainly:
 
-* **Each direction picks its own host API.** On Windows this lands on DirectSound for the microphone and MME for the speakers — a split no amount of reasoning would have produced.
-* **The probe runs in the mode the app actually ships.** DirectSound input passes a callback stream and fails a blocking read; probing the wrong mode rejected a microphone that works perfectly.
+**Each direction picks its own host API.** On Windows this lands on DirectSound for the microphone and MME for the speakers — a split no amount of reasoning would have produced.
+
+**The probe runs in the mode the app actually ships.** DirectSound input passes a callback stream and fails a blocking read; probing the wrong mode rejected a microphone that works perfectly.
 
 Your choice is stored **by name, not by index** — indices shift whenever something is plugged in. If the saved device is gone, it falls back to the system default and says so in the log rather than failing to start.
 
 ### 🔗 It stops forgetting the conversation when the connection drops
 
-`session_resumption` was switched on in the config and the handle the server sent back was **never read** — so every reconnect started an empty session. A dropped packet, or simply changing the voice, wiped the conversation. "Unlimited sessions" leaked through exactly this hole.
+**Session resumption** was switched on in the config and the handle the server sent back was **never read** — so every reconnect started an empty session. A dropped packet, or simply changing the voice, wiped the conversation. "Unlimited sessions" leaked through exactly this hole.
 
 The handle is captured and replayed now. A network blip, or switching your microphone, keeps the conversation intact.
 
-It is held in memory only, deliberately: writing it to disk would make a fresh launch continue yesterday's chat, which sounds appealing but breaks the session-summary flow — a conversation that never ends never produces a summary, and the "yesterday we talked about…" line in the morning briefing silently disappears. Changing the **voice** also starts clean on purpose, since resuming restores the server's session state and would likely bring the old voice back with it.
+It is held in memory only, deliberately: writing it to disk would make a fresh launch continue yesterday's chat, which sounds appealing but breaks the session-summary flow — a conversation that never ends never produces a summary, and "yesterday we talked about…" line in the morning briefing silently disappears. Changing the **voice** also starts clean on purpose, since resuming restores the server's session state and would likely bring the old voice back with it.
 
 ### 🩹 Fixes that came with it
 
-* **The assistant could die on a log line.** Status lines carry emoji and arrows (`📤 file_controller → Moved: a.txt → Documents/`). On a non-UTF-8 console — cp1254 on a Turkish Windows, cp1251 on a Russian one, cp932 on a Japanese one — printing one raises `UnicodeEncodeError`, and because that print sits *after* the tool's own `try/except`, it escaped into the receive loop and took the session down.
-* **Every computer command paid for two model round trips.** `computer_settings` made an *entire second Gemini call, inside the tool*, purely to translate the request into one of its own action names — because the declaration only said "The action to perform", so the model rarely filled it in. When that second call failed, the fallback was `description.lower().replace(" ", "_")`, which turns the Turkish for "turn it down" into `sesi_kis` and straight into "Unknown action". The declaration now names all 56 actions and the rest is spelling tolerance handled locally by `difflib` in microseconds. When nothing matches it suggests real action names instead of dead-ending.
+* **The assistant could die on a log line.** Status lines carry emoji and arrows (`📤 file_controller → Moved: a.txt → Documents/`). On a non-UTF-8 console — cp1254 on a Turkish Windows, cp1251 on a Russian one, cp932 on a Japanese one — printing one raises `UnicodeEncodeError`, and because this print sits *after* the tool's own `try/except`, it escaped into the receive loop and took the session down.
+* **Every computer command paid for two model round trips.** `computer_settings` made an **entire second Gemini call, inside the tool**, purely to translate the request into one of its own action names — because the declaration only said "The action to perform", so the model rarely filled it in. When that second call failed, the fallback was `description.lower().replace(" ", "_")`, which turns the Turkish for "turn it down" into "sesi_kis" and straight to "Unknown action". The declaration now names all 56 actions and the rest is spelling tolerance handled locally by `difflib` in microseconds. When nothing matches it suggests real action names instead of dead-ending.
 * An unresolvable saved audio device, or one the driver refuses to open, falls back to the system default and says so — on both the microphone and the speakers.
 * A rejected session-resumption handle is dropped after one attempt, so an expired handle can never be replayed on every retry and prevent the reconnect it exists to protect.
 
@@ -650,7 +548,7 @@ python main.py
 ## 📋 Requirements
 
 | Requirement | Details |
-| --- | --- |
+|---|---|
 | **OS** | Windows 10/11, macOS, or Linux |
 | **Linux display server** | Everything works on **X11**. On **Wayland** — the default on Ubuntu 22.04+, Fedora and current GNOME/KDE — the system does not permit any program to type, click, capture the screen or raise another window, so those features are unavailable and JARVIS says so at startup instead of pretending. Voice, memory, files, the web and opening applications are unaffected. Log out and pick an Xorg session to get the rest |
 | **macOS permissions** | Accessibility (to type and click) and Screen Recording (to see the screen), both under System Settings → Privacy & Security. Until granted, those actions silently do nothing — the OS reports success either way |
@@ -660,6 +558,7 @@ python main.py
 | **API Key** | Free Gemini API key (entered on first launch → `config/api_keys.json`). Only for the Gemini engine — a fully local setup needs no key and no account |
 | **GPU** | **Not required, anywhere.** The avatar and HUD video are rendered in software; local speech recognition and the neural voice both run on the CPU by default |
 | **YouTube on the HUD** | `yt-dlp`, installed by `setup.py`. Without it, local files and direct URLs still play and YouTube links open in the browser with an explanation |
+| **Aviation Weather** | No API key or account required. The plugin uses the existing `requests` dependency and AviationWeather.gov's public API; an internet connection is required |
 | **Wake word** *(optional)* | One-click download from ⚙ → WAKE WORD (`openwakeword`, a few MB, fully local) |
 | **A different engine** *(optional)* | Nothing extra. ⚙ → ENGINE & PROVIDERS talks to any local or hosted model over HTTP using a library the app already has |
 | **Local speech recognition** *(optional)* | `faster-whisper`, installed from the same panel. **CPU is the default** — a GPU is an option, never a requirement |
@@ -683,7 +582,7 @@ Mark LVI/
 │   ├── schema.py             # Tool declarations: Gemini <-> OpenAI <-> Anthropic, and the budget
 │   ├── audio.py              # Rates and formats — 16 kHz in, 24 kHz out, everything between
 │   ├── llm_openai.py         # Every /v1/chat/completions endpoint: local servers and hosted APIs
-│   ├── stt_whisper.py        # faster-whisper on the CPU, or a transcription API
+│   ├── stt_whisper.py        # Whisper on the CPU, or a transcription API
 │   ├── tts_piper.py          # Neural voice here, ~50 languages, follows the one you speak
 │   ├── tts_system.py         # Windows SAPI / macOS say / Linux espeak-ng — nothing to download
 │   ├── tts_elevenlabs.py     # One voice, every language, streamed
@@ -696,6 +595,7 @@ Mark LVI/
 │   ├── _template.py          # Copy this to write a new skill — one file, drop in, done
 │   │                         #   A file starting with _ is a shared driver, not a skill:
 │   │                         #   the loader skips it, and the skills beside it import it.
+│   ├── aviation_weather.py   # Latest METAR/TAF for up to three ICAO stations via AviationWeather.gov
 │   ├── _whatsapp_core.py     # Shared WhatsApp driver — desktop app or Web, all three OSes
 │   ├── whatsapp_call.py      # Place and end WhatsApp voice / video calls
 │   ├── whatsapp_guard.py     # Answer, decline or auto-reply to INCOMING WhatsApp calls
@@ -739,7 +639,7 @@ Mark LVI/
 │   ├── file_controller.py    # File system operations
 │   ├── file_processor.py     # Document reading and summarization
 │   ├── send_message.py       # Messaging integration
-│   ├── weather_report.py     # Live weather data
+│   ├── weather_report.py     # Live city weather data
 │   ├── video_player.py       # Plays video on the HUD, where the avatar normally is
 │   └── desktop.py            # Desktop and taskbar control
 ├── memory/
@@ -761,7 +661,7 @@ Mark LVI/
 │   │                         #   cooldowns, and the configured provider as one more rung
 │   ├── prompt.txt            # All prompt wording — {tokens} are filled from the live system at startup
 │   ├── avatar.py             # Avatar renderer — lighting, pose, expression, mouth (QPainter)
-│   ├── avatar_mesh.py        # Head geometry — loads the face, generates skull/neck/rigs
+│   ├── avatar_mesh.py        # Head geometry — loads the face, generates skull/neck/risers
 │   ├── face_model.obj        # The face itself (MediaPipe canonical model, Apache-2.0, 25 KB)
 │   ├── viseme.py             # Transcript → mouth shapes, fused with the audio's timing
 │   ├── echo.py               # Tells your voice from the assistant's own echo; self-calibrating
@@ -782,24 +682,26 @@ Mark LVI/
 ## 🙏 Third-Party Assets
 
 | Asset | Source | Licence |
-| --- | --- | --- |
+|---|---|---|
 | `core/face_model.obj` | [MediaPipe](https://github.com/google-ai-edge/mediapipe) canonical face model — 468 vertices of measured human face geometry | Apache License 2.0 |
+| Aviation weather reports | [AviationWeather.gov](https://aviationweather.gov/) public data API | Public data; no API key or account required |
 
 ---
 
 ## 🔒 Your Data
 
-Everything stays on your machine. There is no MARK server, no telemetry and no account.
+Most data stays on your machine. There is no MARK server, no telemetry and no account. When the Aviation Weather plugin is used, the requested ICAO station codes are sent to AviationWeather.gov to retrieve the public reports; no credentials or API key are included.
 
 | What | Where | Notes |
 |---|---|---|
 | Gemini API key, plugin and provider credentials | `config/api_keys.json` | **Plaintext.** Anyone with your user account can read it. Treat it like a password file. |
 | Dashboard TLS certificate + private key | `config/certs/` | Generated locally, self-signed, never leaves the machine. |
 | What the assistant remembers about you | `memory/long_term.json` | Delete the file to make it forget everything. |
+| Requested aviation station codes | AviationWeather.gov | Sent only when the Aviation Weather plugin is used. No API key or account is required. |
 
-All three are listed in `.gitignore`, so a fork or a pull request cannot leak them by accident. **If you have already committed `config/api_keys.json` anywhere public, revoke that key** at [aistudio.google.com](https://aistudio.google.com/app/apikey) and generate a new one — removing the file in a later commit does not remove it from the history.
+All three local files are listed in `.gitignore`, so a fork or a pull request cannot leak them by accident. **If you have already committed `config/api_keys.json` anywhere public, revoke that key** at [aistudio.google.com](https://aistudio.google.com/app/apikey) and generate a new one — removing the file in a later commit does not remove it from the history.
 
-Your voice is streamed to Google's Gemini Live API while a session is open; that is the one thing that leaves your computer, and it stops when you mute or close the app.
+Your voice is streamed to Google's Gemini Live API while a session is open; that is one of the few things that leaves your computer, and it stops when you mute or close the app. The Aviation Weather plugin makes a separate public-data request to AviationWeather.gov when you ask for METAR or TAF information.
 
 **Mark LVI changes what that sentence can say about you.** Choose a local engine — Whisper on your CPU, a model served by Ollama or LM Studio, your system's own voice — and nothing leaves the machine at all: no audio, no transcript, no key, no account. Choose a hosted provider instead and your audio and text go to that vendor rather than to Google. The panel says which is which, and the assistant never quietly switches between them.
 
@@ -818,6 +720,6 @@ Engineered by a developer building a real-world JARVIS-style assistant.
 ⭐ **Star the repository to support the journey to Mark 100.**
 
 | Platform | Link |
-| --- | --- |
+|---|---|
 | YouTube | [@FatihMakes](https://www.youtube.com/@FatihMakes) |
 | Instagram | [@fatihmakes](https://www.instagram.com/fatihmakes) |

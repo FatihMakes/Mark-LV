@@ -32,7 +32,7 @@ from PyQt6.QtCore import (
     QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
-    QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
+    QBrush, QColor, QConicalGradient, QCursor, QDragEnterEvent, QDropEvent, QFont,
     QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
@@ -50,7 +50,7 @@ except Exception as _e:            # noqa: BLE001 - reported, never fatal
     print(f"[Video] playback unavailable ({_e}) — the HUD will not show video.")
 
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu,
     QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QGraphicsScene, QGraphicsView,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar, QSlider,
@@ -1105,6 +1105,7 @@ _FILE_ICONS = {
     "code":    ("💻", "#ffcc00"), "archive": ("📦", "#ff8844"),
     "pptx":    ("📊", "#ff6622"), "text":    ("📃", "#aaaaaa"),
     "data":    ("🔧", "#88ddff"), "unknown": ("📎", "#888888"),
+    "folder":  ("📁", "#ffcc00"),
 }
 _EXT_TO_CAT = {
     **dict.fromkeys(["jpg","jpeg","png","gif","webp","bmp","tiff","svg","ico"], "image"),
@@ -1122,7 +1123,30 @@ _EXT_TO_CAT = {
 }
 
 def _file_category(path: Path) -> str:
+    if path.is_dir():
+        return "folder"
     return _EXT_TO_CAT.get(path.suffix.lower().lstrip("."), "unknown")
+
+
+# Folders nobody means when they say "this project": dependencies, build output,
+# version control. The same list dev_agent skips, so the count on the card is
+# the count of files the coding model will actually look at.
+_SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "venv", ".venv", "env",
+              "__pycache__", ".mypy_cache", ".pytest_cache", "dist", "build",
+              ".idea", ".vscode", ".next", "target", ".jarvis_backup"}
+
+
+def _count_files(folder: Path, cap: int = 5000) -> int:
+    """Files in a project folder, stopping at `cap` — a whole drive dropped by
+    mistake must not freeze the window while it is counted."""
+    import os
+    n = 0
+    for _root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        n += len(files)
+        if n >= cap:
+            return cap
+    return n
 
 def _fmt_size(size: int) -> str:
     if   size < 1024:    return f"{size} B"
@@ -1140,6 +1164,7 @@ class FileDropZone(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(100)
         self._current_file: str | None = None
+        self._folder_files = 0
         self._hovering  = False
         self._drag_over = False
         self._dash_offset = 0.0
@@ -1175,7 +1200,7 @@ class FileDropZone(QWidget):
         urls = e.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
-            if Path(path).is_file():
+            if Path(path).is_file() or Path(path).is_dir():
                 self._set_file(path)
         self._canvas.update()
 
@@ -1196,6 +1221,25 @@ class FileDropZone(QWidget):
         self._current_file = None; self._canvas.update()
 
     def _browse(self):
+        # Qt has no single dialog that picks "a file or a folder", so the click
+        # asks which — a folder is what the coding model works on.
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {C.DARK}; color: {C.TEXT}; "
+            f"border: 1px solid {C.BORDER_B}; font-family: 'Courier New'; }}"
+            f"QMenu::item {{ padding: 6px 18px; }}"
+            f"QMenu::item:selected {{ background: {C.PRI_GHO}; }}")
+        pick_file = menu.addAction("📄  Choose a file…")
+        pick_dir = menu.addAction("📁  Choose a folder…  (for coding)")
+        chosen = menu.exec(QCursor.pos())
+        if chosen is pick_dir:
+            path = QFileDialog.getExistingDirectory(
+                self, "Select a project folder for JARVIS", str(Path.home()))
+            if path:
+                self._set_file(path)
+            return
+        if chosen is not pick_file:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Select a file for JARVIS", str(Path.home()),
             "All Files (*.*);;"
@@ -1212,6 +1256,7 @@ class FileDropZone(QWidget):
 
     def _set_file(self, path: str):
         self._current_file = path
+        self._folder_files = _count_files(Path(path)) if Path(path).is_dir() else 0
         self._canvas.update()
         self.file_selected.emit(path)
 
@@ -1262,11 +1307,11 @@ class _DropCanvas(QWidget):
         p.setFont(QFont("Courier New", 8))
         p.setPen(QPen(qcol(C.PRI_DIM if not hover else C.TEXT), 1))
         p.drawText(QRectF(0, cy + 8, W, 16), Qt.AlignmentFlag.AlignCenter,
-                   "Drop file here  or  Click to Browse")
+                   "Drop a file or folder  or  Click to Browse")
         p.setFont(QFont("Courier New", 7))
         p.setPen(QPen(qcol("#1a4a5a"), 1))
         p.drawText(QRectF(0, cy + 24, W, 14), Qt.AlignmentFlag.AlignCenter,
-                   "Images · Video · Audio · PDF · Docs · Code · Data")
+                   "Images · Video · Audio · PDF · Docs · Code · Project folders")
 
     def _paint_drag_over(self, p, W, H):
         cx, cy = W / 2, H / 2
@@ -1281,8 +1326,14 @@ class _DropCanvas(QWidget):
         path = Path(self._z._current_file)
         cat  = _file_category(path)
         icon, icon_col = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
-        size_str = _fmt_size(path.stat().st_size)
+        try:
+            size_str = _fmt_size(path.stat().st_size)
+        except OSError:                       # moved or deleted since loading
+            size_str = "gone"
         ext_str  = path.suffix.upper().lstrip(".") or "FILE"
+        if cat == "folder":
+            n = self._z._folder_files
+            ext_str, size_str = "FOLDER", f"{n}{'+' if n >= 5000 else ''} files"
 
         block_x, block_w = 10, 60
         p.setFont(QFont("Segoe UI Emoji", 22) if _OS == "Windows" else QFont("Arial", 22))
@@ -2686,13 +2737,17 @@ class ProvidersOverlay(_HudOverlay):
     def __init__(self, parent=None):
         super().__init__(parent)
         # Imported HERE, on the click — never at startup. See the class docstring.
-        from memory.config_manager import (get_pipeline, get_provider_config,
+        from memory.config_manager import (get_coding_provider, get_pipeline,
+                                           get_provider_config,
                                            get_provider_mode, get_sidecar_first,
                                            get_sidecar_provider)
         from providers import registry
 
         self._registry = registry
         self._get_cfg = get_provider_config
+        # What the running engine was built from, before any edit here — see
+        # _apply for why this cannot be read at APPLY time.
+        self._opened_engine = self._engine_fingerprint()
         # Warm anything a provider can only learn by asking the machine, off
         # this thread. The installed voice list costs a PowerShell subprocess —
         # measured at 1.70 seconds — and the form asks for it on every rebuild,
@@ -2719,7 +2774,6 @@ class ProvidersOverlay(_HudOverlay):
         # Fields deliberately not drawn — the catalog already answered them, or
         # they are behind MORE. Tracked rather than asked of Qt: see _fields_into.
         self._hidden: dict[str, set] = {}
-        self._picked: dict[str, str] = {}       # slot -> catalog entry id
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
@@ -2798,15 +2852,20 @@ class ProvidersOverlay(_HudOverlay):
         self._footer.setFont(QFont("Courier New", 7))
         self._footer.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
 
-        self._pipe = dict(get_pipeline())
-        self._sidecar = get_sidecar_provider()
+        # Every value below is a service id — "openai_compat@minimax" — so the
+        # fallback, the coding model and ② THINKING can each be a different
+        # service with settings of its own.
+        self._pipe = {slot: self._normalise(sid, slot)
+                      for slot, sid in dict(get_pipeline()).items()}
+        self._sidecar = self._normalise(get_sidecar_provider(), "llm")
+        self._coding = self._normalise(get_coding_provider(), "llm")
         self._sidecar_first = get_sidecar_first()
         self._rebuild_body()
 
         outer.addWidget(self._footer)
 
         row = QHBoxLayout(); row.setSpacing(8)
-        apply_btn = QPushButton("▸  SAVE  &  APPLY")
+        apply_btn = QPushButton("▸  SAVE  &&  APPLY")
         apply_btn.setFixedHeight(34)
         apply_btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
         apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3077,6 +3136,75 @@ class ProvidersOverlay(_HudOverlay):
                 return eid
         return best or (entries[0][0] if len(entries) == 1 else "")
 
+    def _sid(self, pid: str, eid: str) -> str:
+        """The service id for one catalog row: "openai_compat@minimax", or the
+        bare provider id for a provider without a catalog."""
+        if not pid:
+            return ""
+        decl = self._registry.get_declaration(pid) or {}
+        return f"{pid}@{eid}" if decl.get("catalog") and eid else pid
+
+    def _parts(self, sid: str, kind: str) -> tuple[str, str]:
+        """(provider id, catalog entry id) for a service id."""
+        if not sid:
+            return "", ""
+        base, entry = self._registry.split_id(sid)
+        if "@" not in sid:
+            entry = self._current_entry(kind, base) or base
+        return base, entry
+
+    def _normalise(self, sid: str, kind: str) -> str:
+        """A stored id in its current shape.
+
+        config_manager converts every config that recorded which service it was
+        for. What is left is a provider id with no record of that, from before
+        the record existed: the service is worked out from the address once,
+        and its settings come along to the new id."""
+        if not sid or "@" in sid:
+            return sid
+        base, eid = self._parts(sid, kind)
+        new = self._sid(base, eid)
+        if new != sid and not self._get_cfg(new) and self._get_cfg(sid):
+            from memory.config_manager import save_provider_config
+            save_provider_config(new, dict(self._get_cfg(sid), catalog=eid))
+        return new
+
+    def _service_combo(self, kind: str, first: tuple, fmt) -> QComboBox:
+        """A dropdown of every service for one slot. `first` is the row for
+        "nothing chosen"; `fmt(entry, decl)` is the text for each service."""
+        box = self._combo()
+        box.addItem(*first)
+        for pid, eid, entry, decl in self._catalog(kind):
+            box.addItem(fmt(entry, decl), self._sid(pid, eid))
+        return box
+
+    def _select(self, box: QComboBox, sid: str) -> None:
+        i = box.findData(sid) if sid else 0
+        box.setCurrentIndex(max(0, i))
+
+    def _apply_entry(self, kind: str, sid: str) -> None:
+        """Store a service's shortcut values, the first time it is picked.
+
+        Each service keeps its own settings now, so picking MiniMax again after
+        trying OpenAI brings back the MiniMax model and key as they were left.
+        Only a preset address is always rewritten — that one belongs to the
+        service, not to the person.
+
+        The open form's widgets are dropped afterwards, because the redraw that
+        follows saves whatever they hold, and the redraw must not write one
+        service's fields into another's settings."""
+        from memory.config_manager import save_provider_config
+        pid, eid = self._parts(sid, kind)
+        stored = self._get_cfg(sid)
+        for _p, _e, entry, _d in self._catalog(kind):
+            if _p == pid and _e == eid:
+                values = {k: v for k, v in (entry.get("values") or {}).items()
+                          if k == "base_url" or k not in stored}
+                values["catalog"] = eid
+                save_provider_config(sid, values)
+                break
+        self._edits.pop(sid, None)
+
     # ── body ─────────────────────────────────────────────────────────────────
     def _clear(self, lay) -> None:
         while lay.count():
@@ -3117,6 +3245,7 @@ class ProvidersOverlay(_HudOverlay):
             self._body_lay.addWidget(w)
 
         self._body_lay.addWidget(self._sidecar_box_widget())
+        self._body_lay.addWidget(self._coding_box_widget())
         self._body_lay.addStretch(1)
         self._update_footer()
 
@@ -3124,10 +3253,7 @@ class ProvidersOverlay(_HudOverlay):
         head = self._label(f"{num}  {name}", 9, C.PRI, bold=True)
         w, lay = self._box([head, self._label(what, 7, C.TEXT_DIM)])
 
-        entries = self._catalog(slot)
-        box = self._combo()
-        box.addItem("— not set —", ("", ""))
-        for pid, eid, entry, decl in entries:
+        def fmt(entry, decl):
             label = entry["label"]
             if entry.get("local") is True:
                 label = f"🖥  {label}"
@@ -3138,70 +3264,53 @@ class ProvidersOverlay(_HudOverlay):
             note = entry.get("note") or ""
             if not decl.get("_available", True):
                 note = (note + " · needs install").strip(" ·")
-            box.addItem(f"{label}{'   —  ' + note if note else ''}", (pid, eid))
+            return f"{label}{'   —  ' + note if note else ''}"
 
-        pid_now = self._pipe.get(slot, "")
-        eid_now = self._picked.get(slot) or self._current_entry(slot, pid_now)
-        idx = box.findData((pid_now, eid_now)) if pid_now else 0
-        if pid_now and idx < 0:
-            # A provider IS chosen — the form for it is drawn right below — so
-            # the box must never read "not set". It did, and it was the first
-            # thing anybody noticed: an entry whose settings no longer match
-            # any catalog row (upgraded from an older layout, or edited by
-            # hand) resolved to nothing at all, and the panel contradicted
-            # itself on screen. Falling back to that provider's first row is
-            # always closer to the truth than claiming nothing is selected.
-            for i in range(box.count()):
-                data = box.itemData(i)
-                if data and data[0] == pid_now:
-                    idx = i
-                    self._picked[slot] = data[1]
-                    break
-        box.setCurrentIndex(idx if idx >= 0 else 0)
+        box = self._service_combo(slot, ("— not set —", ""), fmt)
+        sid = self._pipe.get(slot, "")
+        self._select(box, sid)
         box.currentIndexChanged.connect(
             lambda _i, s=slot, b=box: self._slot_changed(s, b))
-        if pid_now:
-            QTimer.singleShot(0, lambda p=pid_now: self._prepare(p))
+        if sid:
+            QTimer.singleShot(0, lambda p=sid: self._prepare(p))
         lay.addWidget(box)
 
-        if pid_now:
-            self._fields_into(lay, slot, pid_now, eid_now)
+        if sid:
+            self._fields_into(lay, slot, sid)
             # If a list was already fetched, use it; if not, go and get one.
-            if self._model_cache.get(pid_now):
-                QTimer.singleShot(0, lambda p=pid_now: self._on_models_ready(
+            if self._model_cache.get(sid):
+                QTimer.singleShot(0, lambda p=sid: self._on_models_ready(
                     p, self._model_cache[p]))
             else:
-                QTimer.singleShot(0, lambda p=pid_now: self._fetch_models(p))
+                QTimer.singleShot(0, lambda p=sid: self._fetch_models(p))
         return w
 
     def _slot_changed(self, slot: str, box: QComboBox) -> None:
-        pid, eid = box.currentData() or ("", "")
+        sid = box.currentData() or ""
         self._remember_edits()
-        self._pipe[slot] = pid
-        self._picked[slot] = eid
-        if pid and eid:
+        self._pipe[slot] = sid
+        if sid:
             # Applying the shortcut is the entire point of the catalog: pick
-            # Ollama and the address is already right. The choice itself is
-            # saved alongside it — see _current_entry for why.
-            from memory.config_manager import save_provider_config
-            for _p, _e, entry, _d in self._catalog(slot):
-                if _p == pid and _e == eid:
-                    values = dict(entry.get("values") or {})
-                    values["catalog"] = eid
-                    save_provider_config(pid, values)
-                    break
-            self._fetch_models(pid)
+            # Ollama and the address is already right.
+            self._apply_entry(slot, sid)
+            self._fetch_models(sid)
         QTimer.singleShot(0, self._rebuild_body)
 
-    def _fields_into(self, lay, slot: str, pid: str, eid: str) -> None:
+    def _fields_into(self, lay, slot: str, sid: str) -> None:
+        from dataclasses import replace
+
         from providers.base import Field
 
-        decl = self._registry.get_declaration(pid)
+        # Everything this form stores, shows and tests is keyed by the SERVICE
+        # id, so two services of one provider never share a box or a setting.
+        pid = sid
+        base, eid = self._parts(sid, slot)
+        decl = self._registry.get_declaration(base)
         if decl is None:
             return
         stored = dict(self._get_cfg(pid))
         entry = next((e for p, i, e, _ in self._catalog(slot)
-                      if p == pid and i == eid), {})
+                      if p == base and i == eid), {})
         is_local = entry.get("local") is True
         entry_values = entry.get("values") or {}
         # An entry that MENTIONS the address has answered it — including
@@ -3237,6 +3346,13 @@ class ProvidersOverlay(_HudOverlay):
             if f.key == "api_key" and is_local:
                 carried[f.key] = (self._line(str(stored.get(f.key, "") or "")), f)
                 continue
+            # The provider declares the key optional because local servers take
+            # none — and that one declaration was printing "(optional)" and
+            # "Local servers usually need none" under MiniMax and OpenAI, which
+            # refuse every request without one.
+            if f.key == "api_key" and entry.get("local") is False:
+                f = replace(f, required=True,
+                            hint=f"Needed — create one in your {entry['label']} account")
             if f.key == "backend":
                 carried[f.key] = (self._line(
                     str(entry.get("values", {}).get("backend")
@@ -3351,27 +3467,18 @@ class ProvidersOverlay(_HudOverlay):
             7, C.TEXT_DIM))
 
         # Read the stored choice BEFORE the box exists. The first version asked
-        # `_sidecar_choice()`, which reads the combo — and at this point that is
-        # the empty box being built, so the answer was always "nothing chosen"
-        # and the form under it never appeared.
-        cur_pid = self._sidecar
-        cur_eid = self._current_entry("llm", cur_pid) if cur_pid else ""
+        # the combo — and at this point that is the empty box being built, so
+        # the answer was always "nothing chosen" and the form never appeared.
+        sid = self._sidecar
 
-        self._sidecar_combo = self._combo()
-        self._sidecar_combo.addItem("Gemini only  —  the way it has always been",
-                                    ("", ""))
-        for pid, eid, entry, decl in self._catalog("llm"):
-            mark = "🖥" if entry.get("local") else ("☁" if entry.get("local")
-                                                   is False else "  ")
-            self._sidecar_combo.addItem(
-                f"{mark}  Fall back to {entry['label']}", (pid, eid))
-        i = self._sidecar_combo.findData((cur_pid, cur_eid)) if cur_pid else 0
-        if cur_pid and i < 0:
-            for j in range(1, self._sidecar_combo.count()):
-                if (self._sidecar_combo.itemData(j) or ("", ""))[0] == cur_pid:
-                    i = j
-                    break
-        self._sidecar_combo.setCurrentIndex(max(0, i))
+        def fmt(entry, _decl):
+            mark = "🖥" if entry.get("local") else (
+                "☁" if entry.get("local") is False else "  ")
+            return f"{mark}  Fall back to {entry['label']}"
+
+        self._sidecar_combo = self._service_combo(
+            "llm", ("Gemini only  —  the way it has always been", ""), fmt)
+        self._select(self._sidecar_combo, sid)
         self._sidecar_combo.currentIndexChanged.connect(self._sidecar_changed)
         lay.addWidget(self._sidecar_combo)
 
@@ -3382,45 +3489,89 @@ class ProvidersOverlay(_HudOverlay):
         self._first_combo.setCurrentIndex(1 if self._sidecar_first else 0)
         lay.addWidget(self._first_combo)
 
-        # In pipeline mode the model chosen for ② THINKING answers these too, so
-        # there is nothing more to fill in. In Gemini mode there IS no ② section
-        # — and the first version still said "it uses whatever you set up under
-        # ② THINKING", which named a box that was not on the screen. So a
-        # service picked here gets its own form, right here.
-        if cur_pid:
-            if self._mode == "pipeline" and cur_pid == self._pipe.get("llm"):
+        # In pipeline mode the model chosen for ② THINKING may answer these too,
+        # and then there is nothing more to fill in. In Gemini mode there IS no
+        # ② section, so a service picked here gets its own form, right here.
+        if sid:
+            if self._mode == "pipeline" and sid == self._pipe.get("llm"):
                 lay.addWidget(self._label(
                     "Uses the model you chose for ② THINKING.", 7, C.TEXT_DIM))
             else:
-                self._fields_into(lay, "llm", cur_pid, cur_eid)
+                self._fields_into(lay, "llm", sid)
         else:
             lay.addWidget(self._label(
                 "Left as it is, these keep using Gemini and stop working when "
                 "its text quota runs out.", 7, C.TEXT_DIM))
         return w
 
-    def _sidecar_choice(self) -> tuple:
-        """(provider id, catalog entry id) for the background-request model."""
-        box = getattr(self, "_sidecar_combo", None)
-        if box is not None:
-            data = box.currentData()
-            if isinstance(data, tuple):
-                return data
-        pid = self._sidecar
-        return (pid, self._current_entry("llm", pid) if pid else "")
+    def _coding_box_widget(self) -> QWidget:
+        """Which model dev_agent writes code with.
+
+        Separate from background requests because it is the one job where the
+        model makes the most difference and the requests are the longest — a
+        whole source file at a time. Whatever is picked is tried FIRST for code,
+        with Gemini behind it, so a service having a bad day still produces a
+        project instead of nothing."""
+        head = self._label("🛠  CODING", 9, C.PRI, bold=True)
+        w, lay = self._box([head])
+        lay.addWidget(self._label(
+            "The model that plans, writes and fixes projects when you ask the "
+            "assistant to build something. Saved to Desktop/JarvisProjects.",
+            7, C.TEXT_DIM))
+
+        sid = self._coding
+
+        def fmt(entry, _decl):
+            mark = "🖥" if entry.get("local") else (
+                "☁" if entry.get("local") is False else "  ")
+            star = "   ★ recommended" if entry.get("id") == "minimax" else ""
+            return f"{mark}  Code with {entry['label']}{star}"
+
+        self._coding_combo = self._service_combo(
+            "llm", ("Same as background requests", ""), fmt)
+        # The sponsor's model sits directly under the default, where it is the
+        # first real choice anybody sees — not buried twelfth in the list.
+        for i in range(self._coding_combo.count()):
+            if (self._coding_combo.itemData(i) or "").endswith("@minimax"):
+                text = self._coding_combo.itemText(i)
+                data = self._coding_combo.itemData(i)
+                self._coding_combo.removeItem(i)
+                self._coding_combo.insertItem(1, text, data)
+                break
+        self._select(self._coding_combo, sid)
+        self._coding_combo.currentIndexChanged.connect(self._coding_changed)
+        lay.addWidget(self._coding_combo)
+
+        if not sid:
+            lay.addWidget(self._label(
+                "Code is written by whatever answers background requests above.",
+                7, C.TEXT_DIM))
+        elif sid == self._sidecar:
+            lay.addWidget(self._label(
+                "Uses the settings under BACKGROUND REQUESTS.", 7, C.TEXT_DIM))
+        elif self._mode == "pipeline" and sid == self._pipe.get("llm"):
+            lay.addWidget(self._label(
+                "Uses the model you chose for ② THINKING.", 7, C.TEXT_DIM))
+        else:
+            self._fields_into(lay, "llm", sid)
+        return w
 
     def _sidecar_changed(self, _ix) -> None:
-        pid, eid = self._sidecar_choice()
+        sid = self._sidecar_combo.currentData() or ""
         self._remember_edits()
-        self._sidecar = pid
-        if pid and eid:
-            from memory.config_manager import save_provider_config
-            for _p, _e, entry, _d in self._catalog("llm"):
-                if _p == pid and _e == eid:
-                    values = dict(entry.get("values") or {})
-                    values["catalog"] = eid
-                    save_provider_config(pid, values)
-                    break
+        self._sidecar = sid
+        if sid:
+            self._apply_entry("llm", sid)
+            self._fetch_models(sid)
+        QTimer.singleShot(0, self._rebuild_body)
+
+    def _coding_changed(self, _ix) -> None:
+        sid = self._coding_combo.currentData() or ""
+        self._remember_edits()
+        self._coding = sid
+        if sid:
+            self._apply_entry("llm", sid)
+            self._fetch_models(sid)
         QTimer.singleShot(0, self._rebuild_body)
 
     def _update_footer(self) -> None:
@@ -3589,20 +3740,10 @@ class ProvidersOverlay(_HudOverlay):
         threading.Thread(target=work, daemon=True).start()
 
     def _apply(self) -> None:
-        from memory.config_manager import (get_pipeline, get_provider_mode,
-                                           save_providers)
-
-        before = (get_provider_mode(), dict(get_pipeline()))
+        from memory.config_manager import save_providers
 
         # ONE write, not five. See save_providers for what the five cost.
-        creds = {pid: self._values(pid) for pid in list(self._edits)}
-        for slot, eid in self._picked.items():
-            pid = self._pipe.get(slot, "")
-            if pid and eid:
-                creds.setdefault(pid, {})["catalog"] = eid
-        sidecar_pid, sidecar_eid = self._sidecar_choice()
-        if sidecar_pid and sidecar_eid:
-            creds.setdefault(sidecar_pid, {}).setdefault("catalog", sidecar_eid)
+        creds = {sid: self._values(sid) for sid in list(self._edits)}
 
         save_providers(
             mode=self._mode,
@@ -3610,8 +3751,9 @@ class ProvidersOverlay(_HudOverlay):
                       "llm": self._pipe.get("llm", ""),
                       "tts": self._pipe.get("tts", "")},
             creds=creds,
-            sidecar=sidecar_pid,
+            sidecar=self._sidecar,
             sidecar_first=self._first_combo.currentData() == "before",
+            coding=self._coding,
         )
 
         # Providers are cached by configuration; a changed setting must not go
@@ -3621,12 +3763,30 @@ class ProvidersOverlay(_HudOverlay):
         except Exception:
             pass
 
-        after = (get_provider_mode(), dict(get_pipeline()))
         self.hide()
-        # Background-request settings take effect on the next call with no
-        # reconnect. Only the conversation engine needs the session rebuilt.
-        if before != after:
+        # Background-request and coding settings take effect on the next call
+        # with no reconnect. Only the conversation engine needs the session
+        # rebuilt — and it does whenever anything it was BUILT from changed.
+        #
+        # Comparing only the mode and which service fills each slot is what
+        # made APPLY look broken: a corrected model name, a new key or another
+        # voice changed none of those, so nothing reconnected and the running
+        # engine went on using the old settings until a restart. And the
+        # "before" has to be taken when the panel opened — the form saves as
+        # it is edited, so reading it here would compare the new settings with
+        # themselves.
+        if self._engine_fingerprint() != self._opened_engine:
             self.changed.emit()
+
+    @staticmethod
+    def _engine_fingerprint() -> str:
+        """Everything the conversation engine is built from, as one string."""
+        from memory.config_manager import (get_pipeline, get_provider_config,
+                                           get_provider_mode)
+        mode, pipe = get_provider_mode(), dict(get_pipeline())
+        used = {sid: get_provider_config(sid) for sid in pipe.values() if sid} \
+            if mode == "pipeline" else {}
+        return json.dumps([mode, pipe, used], sort_keys=True, default=str)
 
 
 class ClipboardPanel(QWidget):
@@ -4238,6 +4398,7 @@ class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
     _content_sig    = pyqtSignal(str, str)   # (title, text) — thread-safe content display
+    _codejob_sig    = pyqtSignal(object)     # dev_agent job state — live coding panel
     _reconfig_sig   = pyqtSignal()           # trigger setup overlay from any thread
     _camera_sig     = pyqtSignal(bytes)      # show camera frame preview (small overlay)
     _cam_stream_sig = pyqtSignal(bool)       # True=start live stream, False=stop
@@ -4521,6 +4682,7 @@ class MainWindow(QMainWindow):
         self._log_sig.connect(self._log.append_log)
         self._state_sig.connect(self._apply_state)
         self._content_sig.connect(self._show_content)
+        self._codejob_sig.connect(self._show_code_job)
         self._reconfig_sig.connect(self._show_setup)
         self._camera_sig.connect(self._show_camera_frame)
         self._confirm_sig.connect(self._show_confirm_banner)
@@ -5562,7 +5724,7 @@ class MainWindow(QMainWindow):
         # drawer used to stutter for a measured 2.104 seconds because a state
         # check imported openwakeword while it was being built, and adding a
         # second thing that does that would undo the fix rather than repeat it.
-        prov_btn = QPushButton("🔌  ENGINE & PROVIDERS")
+        prov_btn = QPushButton("🔌  ENGINE && PROVIDERS")
         prov_btn.setFixedHeight(26)
         prov_btn.setFont(QFont("Courier New", 7))
         prov_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -5833,6 +5995,89 @@ class MainWindow(QMainWindow):
         if first_show:
             total = self._center_split.height()
             self._center_split.setSizes([max(total - 220, 120), 220])
+
+    # ── the coding agent, live ───────────────────────────────────────────────
+    # The panel under the head shows a folder job while it runs: what was asked,
+    # the plan, every file with its state, and the steps as they happen. Drawn
+    # from a snapshot the job publishes on every step, so this slot never reads
+    # anything a worker thread is still changing.
+    _JOB_STATES = {
+        "waiting": ("TEXT_DIM", "○"), "writing": ("PRI", "✎"),
+        "done": ("GREEN", "✓"), "fixing": ("ACC2", "↻"),
+        "skipped": ("TEXT_DIM", "–"), "failed": ("RED", "✕"),
+        "broken": ("RED", "!"),
+    }
+    _JOB_PHASES = ("reading", "planning", "writing", "checking")
+
+    def _show_code_job(self, job: dict):
+        """Slot — Qt main thread. Draws the coding agent's progress."""
+        import time as _time
+        if not job:
+            return
+        e = self._esc
+        col = lambda name: getattr(C, name, C.TEXT)
+        status = job.get("status", "")
+        finished = job.get("finished")
+        took = (finished or _time.time()) - job.get("started", _time.time())
+
+        # Phase strip: where in the job it is, readable at a glance.
+        strip = []
+        phases = list(job.get("phases") or self._JOB_PHASES)
+        here = phases.index(status) if status in phases else (
+            len(phases) if finished else -1)
+        for i, ph in enumerate(phases):
+            c = C.GREEN if i < here else (C.PRI if i == here else C.TEXT_DIM)
+            mark = "●" if i <= here else "○"
+            strip.append(f'<span style="color:{c};">{mark} {ph.upper()}</span>')
+        if finished:
+            fin = C.GREEN if status == "done" else (C.RED if status == "failed" else C.ACC2)
+            strip.append(f'<span style="color:{fin};"><b>● {e(status.upper())}</b></span>')
+
+        parts = [f'<div style="color:{C.TEXT}; font-family:Courier New;">',
+                 f'<div style="color:{C.TEXT_DIM};">{"  ".join(strip)}'
+                 f'&nbsp;&nbsp;·&nbsp;&nbsp;{took:.0f}s</div>',
+                 f'<div style="margin-top:6px;"><span style="color:{C.TEXT_DIM};">'
+                 f'REQUEST&nbsp;</span>{e(job.get("request", ""))}</div>']
+        if job.get("summary"):
+            parts.append(
+                f'<div style="color:{C.WHITE}; border-left:2px solid {C.PRI};'
+                f' padding-left:8px; margin:8px 0;">{e(job["summary"])}</div>')
+        files = job.get("files") or {}
+        if files:
+            parts.append(f'<div style="color:{C.TEXT_DIM}; margin-top:4px;">FILES</div>')
+            for path, f in files.items():
+                cname, mark = self._JOB_STATES.get(f.get("state", ""), ("TEXT_DIM", "·"))
+                verb = "new " if f.get("action") == "create" else ""
+                parts.append(
+                    f'<div><span style="color:{col(cname)};">{mark}</span>&nbsp;'
+                    f'<span style="color:{C.WHITE};">{e(path)}</span>&nbsp;'
+                    f'<span style="color:{C.TEXT_DIM};">{verb}{e(f.get("what", ""))[:110]}'
+                    f'</span></div>')
+        # Newest first, so the latest step sits under the plan and the whole
+        # state of the job is visible without scrolling in a 220-pixel panel.
+        steps = job.get("steps") or []
+        if steps:
+            parts.append(f'<div style="color:{C.TEXT_DIM}; margin-top:8px;">'
+                         f'STEPS — newest first</div>')
+            for t, msg in reversed(steps[-14:]):
+                parts.append(f'<div><span style="color:{C.TEXT_DIM};">{float(t):6.1f}s'
+                             f'</span>&nbsp;{e(msg)}</div>')
+        parts.append("</div>")
+
+        title = f"CODE AGENT — {job.get('folder', '')} · {job.get('model', '')}"
+        first = self._content_title_lbl.text() != title.upper()[:48]
+        self._content_title_lbl.setText(title.upper()[:48])
+        self._content_ts_lbl.setText(_time.strftime("%H:%M:%S"))
+        bar = self._content_display.verticalScrollBar()
+        keep = 0 if first else bar.value()
+        self._content_display.setHtml("".join(parts))
+        # setHtml jumps to the top; put the reader back where they were.
+        bar.setValue(keep)
+        if not self._content_panel.isVisible():
+            self.hud.glance(0.0, -0.85, hold=1.3)
+            self._content_panel.show()
+            total = self._center_split.height()
+            self._center_split.setSizes([max(total - 260, 120), 260])
 
     # ── document review ──────────────────────────────────────────────────────
     # Rendered as rich text into the content panel that already exists, rather
@@ -6210,6 +6455,24 @@ class MainWindow(QMainWindow):
         p    = Path(path)
         cat  = _file_category(p)
         icon, _ = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
+        if cat == "folder":
+            n = self._drop_zone._folder_files
+            self._file_hint.setText(
+                f"{icon}  {p.name}  ·  {n} files  ·  Tell {self._assistant_name} "
+                f"what to change in it")
+            self._log.append_log(f"FOLDER: {p.name} ({n} files) loaded")
+            if self.on_text_command:
+                msg = (
+                    f"[FOLDER_UPLOADED] path={path} | name={p.name} | files={n} | "
+                    f"Briefly tell the user the project folder '{p.name}' is loaded "
+                    f"and that you can improve, fix or extend it with the coding "
+                    f"model — ask what they want changed. When they say, call "
+                    f"dev_agent with mode='improve' and their request as the "
+                    f"description."
+                )
+                threading.Thread(target=self.on_text_command, args=(msg,),
+                                 daemon=True).start()
+            return
         size = _fmt_size(p.stat().st_size)
         self._file_hint.setText(f"{icon}  {p.name}  ·  {size}  ·  Tell {self._assistant_name} what to do with it")
         self._log.append_log(f"FILE: {p.name} ({size}) loaded")
@@ -6940,8 +7203,53 @@ class _RootShim:
         pass
 
 
+def _auto_ui_scale() -> float:
+    """A scale for the interface from the primary screen's usable height.
+
+    Every size in this file — 7 and 8 point text, fixed button heights, panel
+    widths — was laid out on a 1080-pixel-tall screen. Windows only enlarges it
+    when the user has raised display scaling, so on a 1440p monitor left at 100%
+    the whole HUD came out at three-quarters size and the settings text was hard
+    to read. Measured against 900 logical pixels rather than 1080 because the
+    designed sizes were on the small side even there — reported as "generally
+    small" on a 1440p screen already at 125%.
+
+    Windows only, through calls that are not DPI-virtualised — so nothing about
+    the process's DPI awareness is touched before Qt sets it. Elsewhere the
+    system's own scaling is trusted and this returns 1."""
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+        hdc = user32.GetDC(0)
+        try:
+            physical_h = gdi32.GetDeviceCaps(hdc, 117)      # DESKTOPVERTRES
+        finally:
+            user32.ReleaseDC(0, hdc)
+        percent = ctypes.windll.shcore.GetScaleFactorForDevice(0) or 100
+        logical_h = physical_h * 100.0 / percent
+    except Exception:
+        return 1.0
+    return max(1.0, min(2.0, round(logical_h / 900.0 * 20) / 20))
+
+
+def _apply_ui_scale() -> None:
+    """Set Qt's global scale factor. Must run before QApplication exists."""
+    if QApplication.instance() is not None or os.environ.get("QT_SCALE_FACTOR"):
+        return              # too late, or the user set it themselves
+    try:
+        from memory.config_manager import get_ui_scale
+        scale = get_ui_scale() or _auto_ui_scale()
+    except Exception:
+        scale = _auto_ui_scale()
+    if abs(scale - 1.0) > 0.01:
+        os.environ["QT_SCALE_FACTOR"] = f"{scale:.2f}"
+
+
 class JarvisUI:
     def __init__(self, face_path: str, size=None):
+        _apply_ui_scale()
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
@@ -7108,6 +7416,10 @@ class JarvisUI:
     def show_content(self, title: str, text: str):
         """Thread-safe: display content in the panel below the HUD."""
         self._win._content_sig.emit(title[:48], text[:4000])
+
+    def show_code_job(self, job: dict) -> None:
+        """Thread-safe: draw the coding agent's live progress in the panel."""
+        self._win._codejob_sig.emit(dict(job))
 
     def show_quiz(self, topic: str, questions, grade=None) -> None:
         """Thread-safe: put an interactive quiz on the board.

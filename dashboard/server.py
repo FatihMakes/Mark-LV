@@ -199,10 +199,54 @@ def blocking_firewall_rules() -> list:
     return found
 
 
+_ACCESS_ASKED = False
+
+
+def report_network_access(*ports: int) -> bool:
+    """Read-only, never elevated: can a phone reach the dashboard? Prints why
+    not. Called at startup instead of fixing anything.
+
+    WHY STARTUP NO LONGER FIXES IT
+        It used to repair the firewall on every launch, and repairing it needs
+        administrator rights — so the app greeted people with Windows' "allow
+        this app to make changes to your device?" dialog before it had done
+        anything. On a machine where a Windows firewall popup had once been
+        cancelled, that block rule came back and so did the dialog, every
+        single start. For an open-source app that is the worst first
+        impression available: an unexplained request for admin. The repair now
+        happens only when somebody opens REMOTE CONTROL — the one feature that
+        needs it — where the dialog has an obvious reason.
+    """
+    import sys
+    if sys.platform != "win32":
+        return True
+    try:
+        blocked = blocking_firewall_rules()
+    except Exception:
+        return True
+    if blocked:
+        print("[Dashboard] Windows Firewall is blocking this Python from the "
+              "network — the phone dashboard will not connect until that is "
+              "fixed. Open REMOTE CONTROL to fix it (Windows will ask once).")
+        return False
+    return True
+
+
+def fix_network_access(*ports: int) -> None:
+    """Make the dashboard reachable from the phone — at most once per run,
+    and only because the user asked for the phone dashboard."""
+    global _ACCESS_ASKED
+    if _ACCESS_ASKED:
+        return
+    _ACCESS_ASKED = True
+    _ensure_network_access(*ports)
+
+
 def _ensure_network_access(*ports: int) -> None:
     """Cross-platform, best-effort: open port in the OS firewall for LAN access.
 
-    Runs in a background thread — never blocks uvicorn startup.
+    Runs in a background thread. Only ever reached through fix_network_access,
+    i.e. from the user opening REMOTE CONTROL — never at startup.
 
     Windows : writes a .bat file, runs it elevated via Windows ShellExecuteW
               (native UAC dialog, guaranteed to appear). One-time setup.
@@ -268,7 +312,13 @@ def _ensure_network_access(*ports: int) -> None:
         missing_ports = [pt for pt, nm in port_rules.items()
                          if not _netsh_rule_exists(nm)]
         need_prog    = not _netsh_rule_exists(prog_rule)
-        need_private = _network_is_public()
+        if _network_is_public():
+            print("[Dashboard] This network is set to Public in Windows, which "
+                  "blocks phones on it. If it is your own network, set it to "
+                  "Private in Settings > Network & internet. JARVIS will not "
+                  "change that for you — on public Wi-Fi it would expose this "
+                  "computer.")
+        need_private = False
 
         if blocked:
             print(f"[Dashboard] Windows is BLOCKING inbound connections to "
@@ -1179,11 +1229,11 @@ class DashboardServer:
             print("[Dashboard] Run:  pip install fastapi 'uvicorn[standard]' cryptography")
             return
 
-        # Firewall setup runs in a thread — uvicorn starts immediately,
-        # no waiting for UAC dialogs or subprocess timeouts.
-        # Both ports, one pass, one prompt.
-        asyncio.get_event_loop().run_in_executor(
-            None, _ensure_network_access, PORT, SECURE_PORT)
+        # Startup only CHECKS — see report_network_access for why it never
+        # asks for administrator rights here. In a thread: reading the
+        # firewall rules takes about a second.
+        asyncio.get_running_loop().run_in_executor(
+            None, report_network_access, PORT, SECURE_PORT)
 
         # Only make a certificate if HTTPS was actually asked for. Generating
         # one nobody uses just leaves a private key on disk.

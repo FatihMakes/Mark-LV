@@ -525,13 +525,15 @@ def test_costs_nothing_when_unused():
     section("[9] A default install pays nothing")
     import subprocess
     code = (
-        "import sys, json, time;"
+        "import sys, json, time, tempfile, pathlib;"
         "sys.path.insert(0, r'" + str(Path(__file__).resolve().parent.parent) + "');"
-        "p='config/api_keys.json';"
-        "d=json.load(open(p,encoding='utf-8'));"
-        "d.pop('providers',None);"
-        "open(p,'w',encoding='utf-8').write(json.dumps(d,indent=4));"
         "import core.gemini as g;"
+        # A default install: a config with no providers, in a throwaway file -
+        # never the user's own config (this used to rewrite it, and failed on
+        # a fresh install that has none yet).
+        "p=pathlib.Path(tempfile.mkdtemp())/'api_keys.json';"
+        "p.write_text('{}',encoding='utf-8');"
+        "g._KEY_FILE=p;"
         "t=time.perf_counter();"
         "[g._provider_rungs(g.FAST) for _ in range(1000)];"
         "dt=(time.perf_counter()-t)/1000*1e6;"
@@ -981,49 +983,51 @@ def test_panel_settings_survive():
                                        save_provider_mode,
                                        save_sidecar_provider)
 
-    restore = json.loads(
-        (Path(__file__).resolve().parent.parent /
-         "config" / "api_keys.json").read_text(encoding="utf-8")).get("providers")
+    # The test writes the real config and puts it back. A fresh install has
+    # none yet: then the file it made is removed again afterwards.
+    cfg_file = Path(__file__).resolve().parent.parent / "config" / "api_keys.json"
+    had_config = cfg_file.exists()
+    restore = json.loads(cfg_file.read_text(encoding="utf-8")).get("providers") \
+        if had_config else None
 
     try:
         save_provider_mode("gemini")
         save_pipeline(stt="", llm="", tts="")
         save_sidecar_provider("")
-        save_provider_config("openai_compat",
-                             {"base_url": "", "model": "", "catalog": ""})
+        # Every catalog service has its own id and settings —
+        # "openai_compat@ollama" — so that is what the panel offers and stores.
+        OLLAMA = "openai_compat@ollama"
+        save_provider_config(OLLAMA, {"base_url": "", "model": ""})
 
         # -- a provider chosen for background requests is configurable --------
         ov = UI.ProvidersOverlay()
         box = ov._sidecar_combo
-        i = next((k for k in range(box.count())
-                  if box.itemData(k) == ("openai_compat", "ollama")), -1)
+        i = box.findData(OLLAMA)
         check("named services are offered for background requests", i > 0)
         if i > 0:
             box.setCurrentIndex(i)
             ov._sidecar_changed(i)
             ov._rebuild_body()
-            check("choosing one shows its form", "openai_compat" in ov._edits,
+            check("choosing one shows its form", OLLAMA in ov._edits,
                   str(list(ov._edits)))
             check("its address is filled in from the preset",
-                  get_provider_config("openai_compat").get("base_url", "")
+                  get_provider_config(OLLAMA).get("base_url", "")
                   .endswith("11434/v1"),
-                  str(get_provider_config("openai_compat")))
+                  str(get_provider_config(OLLAMA)))
 
         # -- typing survives a redraw ----------------------------------------
-        if "openai_compat" in ov._edits:
-            ov._edits["openai_compat"]["model"][0].setCurrentText("qwen3:8b")
+        if OLLAMA in ov._edits:
+            ov._edits[OLLAMA]["model"][0].setCurrentText("qwen3:8b")
             ov._rebuild_body()
             check("a typed model survives a redraw",
-                  get_provider_config("openai_compat").get("model") == "qwen3:8b",
-                  str(get_provider_config("openai_compat").get("model")))
+                  get_provider_config(OLLAMA).get("model") == "qwen3:8b",
+                  str(get_provider_config(OLLAMA).get("model")))
 
         # -- the whole setup round-trips -------------------------------------
         ov._set_mode("pipeline")
         ov._rebuild_body()
-        ov._pipe.update({"stt": "whisper", "llm": "openai_compat",
-                         "tts": "elevenlabs"})
-        ov._picked.update({"stt": "local", "llm": "ollama",
-                           "tts": "elevenlabs"})
+        ov._pipe.update({"stt": "whisper@local", "llm": OLLAMA,
+                         "tts": "elevenlabs@elevenlabs"})
         ov._rebuild_body()
 
         import pathlib
@@ -1051,9 +1055,8 @@ def test_panel_settings_survive():
         ov2 = UI.ProvidersOverlay()
         check("reopening shows MY OWN SETUP", ov2._mode == "pipeline", ov2._mode)
         check("the local card is the selected one", ov2._card_local.isChecked())
-        check("Ollama is remembered",
-              ov2._current_entry("llm", "openai_compat") == "ollama",
-              ov2._current_entry("llm", "openai_compat"))
+        check("Ollama is remembered", ov2._pipe.get("llm") == OLLAMA,
+              str(ov2._pipe.get("llm")))
         check("no slot reads 'not set'",
               all(ov2._pipe.get(s) for s in ("stt", "llm", "tts")),
               str(ov2._pipe))
@@ -1065,6 +1068,8 @@ def test_panel_settings_survive():
     finally:
         from memory.config_manager import _patch_config
         _patch_config(providers=restore or {})
+        if not had_config:
+            cfg_file.unlink(missing_ok=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

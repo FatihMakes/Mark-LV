@@ -896,6 +896,34 @@ class JarvisLive:
         landed before this feature did."""
         self.request_reconnect(keep_context=True, reason="audio device")
 
+    def _ensure_executor(self):
+        """Give the loop a working thread pool before every connect.
+
+        Reported: a reconnect died with "cannot schedule new futures after
+        shutdown" while resolving Gemini's address — the loop's default pool
+        had been shut down underneath a loop that was still running. Name
+        resolution, every tool and every `to_thread` go through that pool, so
+        once it is gone the assistant can never connect again and retries the
+        same failure forever. Whatever shut it, a fresh pool here turns that
+        into one lost attempt instead of a dead session.
+
+        The loop owns a pool of our own rather than asyncio's default, sized so
+        a long coding job or a slow tool cannot starve address lookups."""
+        from concurrent.futures import ThreadPoolExecutor
+        loop = asyncio.get_running_loop()
+        ex = getattr(loop, "_default_executor", None)
+        dead = ex is not None and (getattr(ex, "_shutdown", False)
+                                   or getattr(ex, "_broken", False))
+        if ex is None or dead or getattr(loop, "_executor_shutdown_called", False):
+            if dead:
+                print("[JARVIS] ⚠️  Thread pool was shut down — replacing it")
+                self.ui.write_log("SYS: Recovered from a stopped worker pool.")
+            # Without this flag reset, asyncio refuses the new pool as well.
+            if getattr(loop, "_executor_shutdown_called", False):
+                loop._executor_shutdown_called = False
+            loop.set_default_executor(
+                ThreadPoolExecutor(max_workers=32, thread_name_prefix="jarvis"))
+
     async def _watch_reconnect(self):
         """Session-scoped task: when a voluntary reconnect is requested, raise a
         signal that unwinds the TaskGroup so the run loop rebuilds the session."""
@@ -918,6 +946,15 @@ class JarvisLive:
                 "Run: pip install fastapi \"uvicorn[standard]\" cryptography"
             )
             return None
+        # The firewall is fixed HERE, not at startup: this is the moment the
+        # user asked for the phone dashboard, so a Windows admin prompt now has
+        # an obvious reason. Once per run, and a no-op when nothing is blocked.
+        try:
+            from dashboard.server import PORT, SECURE_PORT, fix_network_access
+            threading.Thread(target=fix_network_access, args=(PORT, SECURE_PORT),
+                             daemon=True, name="dashboard-firewall").start()
+        except Exception as e:
+            print(f"[Dashboard] Firewall check skipped: {e}")
         key    = self._dashboard.new_key()
         url    = self._dashboard.get_url()
         manual = self._dashboard.get_manual_url()
@@ -1283,6 +1320,7 @@ class JarvisLive:
         args = dict(fc.args or {})
 
         print(f"[JARVIS] 🔧 {name}  {args}")
+        _t_tool = time.monotonic()
         self.ui.set_state("THINKING")
 
 
@@ -1398,6 +1436,21 @@ class JarvisLive:
                 # file_processor: fall back to the currently-uploaded file when none is given
                 if name == "file_processor" and not args.get("file_path") and self.ui.current_file:
                     args["file_path"] = self.ui.current_file
+                # dev_agent: a folder in the upload box is where the work goes.
+                #
+                # Decided HERE, not left to the model. Told plainly in the tool
+                # description, it still answered "create a quiz plugin" with
+                # mode='build' — a brand-new project in Desktop/JarvisProjects,
+                # nowhere near the folder the user had just handed it. Somebody
+                # who loads a folder and asks for something means "in this
+                # folder", so every coding request goes there; clearing the
+                # upload box (✕) is how to ask for a separate new project.
+                if (name == "dev_agent" and not args.get("folder")
+                        and self.ui.current_file
+                        and Path(self.ui.current_file).is_dir()
+                        and str(args.get("mode") or "").lower() != "status"):
+                    args["folder"] = self.ui.current_file
+                    args["mode"] = "improve"
                 _ctx = {"player": self.ui, "speak": self.speak,
                         "response": None, "session_memory": None}
                 r = await loop.run_in_executor(None, lambda: self._action_registry.run(name, args, _ctx))
@@ -1432,7 +1485,11 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        # How long the tool itself took. A long silence after a tool call is
+        # either this number or the model's own time before and after it — and
+        # without it the two look identical from the outside.
+        print(f"[JARVIS] 📤 {name} ({(time.monotonic() - _t_tool) * 1000:.0f} ms) "
+              f"→ {str(result)[:80]}")
 
         # A tool that declared itself NON_BLOCKING also says when its answer may
         # re-enter the conversation. Without this the model finishes whatever it
@@ -2375,6 +2432,7 @@ class JarvisLive:
 
         while True:
             try:
+                self._ensure_executor()
                 print("[JARVIS] Connecting...")
                 self.ui.set_state("THINKING")
                 # Pick the rung to open the conversation on. A model resting

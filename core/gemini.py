@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 import time
 import threading
@@ -652,7 +653,8 @@ def _provider_call(model: str, contents, config, timeout_ms: int):
 
 
 def call(contents, tier: str = FAST, config=None,
-         timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = ""):
+         timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "",
+         provider: str = ""):
     """Run one generation, walking the ladder until one answers.
 
     Returns the SDK's own response object, so callers that need more than the
@@ -677,6 +679,15 @@ def call(contents, tier: str = FAST, config=None,
     if rungs:
         ladder = (rungs + tuple(ladder)) if _provider_first() \
             else (tuple(ladder) + rungs)
+
+    # A service the caller chose for THIS job — dev_agent's coding model — goes
+    # in front of everything, because somebody picked it on purpose. The rest
+    # of the ladder stays behind it, so a service that is down still ends in an
+    # answer rather than in nothing.
+    if provider:
+        chosen = PROVIDER_PREFIX + provider
+        rungs = (chosen,) + tuple(r for r in rungs if r != chosen)
+        ladder = (chosen,) + tuple(m for m in ladder if m != chosen)
 
     resolved_key = key or api_key()
     if not resolved_key:
@@ -745,19 +756,56 @@ def text(contents, tier: str = FAST, config=None,
     return (getattr(resp, "text", None) or "").strip() or default
 
 
+_THINK_RE = re.compile(r"(?is)<think(?:ing)?>.*?</think(?:ing)?>")
+_FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.S)
+
+
+def parse_json(raw: str, default=None):
+    """The JSON value in a model's reply, wherever it sits in the text.
+
+    The first version cut from the first "{" to the last "}". For a LIST of
+    objects — `[{...}, {...}]`, which is what a quiz, a set of steps or any
+    batch of results is — that cut keeps `{...}, {...}`: not JSON, and every
+    such reply failed with "Extra data". So did an object followed by a
+    sentence that contained a brace.
+
+    Now: reasoning blocks and code fences are removed, and the text is read
+    with a real JSON decoder from each "[" or "{" in turn; the first complete
+    value wins, and whatever follows it is ignored."""
+    if not raw:
+        return default
+    body = _THINK_RE.sub("", raw)
+    candidates = [m.group(1) for m in _FENCE_RE.finditer(body)] + [body]
+    decoder = json.JSONDecoder()
+    for cand in candidates:
+        tried = 0
+        for i, ch in enumerate(cand):
+            if ch not in "[{":
+                continue
+            try:
+                value, _end = decoder.raw_decode(cand, i)
+            except ValueError:
+                tried += 1
+                if tried > 200:          # a reply that is mostly braces
+                    break
+                continue
+            return value
+    return default
+
+
 def as_json(contents, tier: str = FAST, config=None,
             timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "", default=None):
-    """`text`, parsed as JSON, tolerating the fences and prose a model wraps it
-    in. `default` when nothing answered or the answer would not parse."""
+    """`text`, parsed as JSON, tolerating the fences, reasoning and prose a
+    model wraps it in. `default` when nothing answered or the answer would not
+    parse. See parse_json."""
     raw = text(contents, tier=tier, config=config, timeout_ms=timeout_ms, key=key)
     if not raw:
         return default
-    if "{" in raw and "}" in raw:
-        raw = raw[raw.find("{"): raw.rfind("}") + 1]
-    elif "[" in raw and "]" in raw:
-        raw = raw[raw.find("["): raw.rfind("]") + 1]
-    try:
-        return json.loads(raw)
-    except Exception as e:
-        print(f"[Gemini] reply was not JSON: {e}")
+    value = parse_json(raw, default=_MISSING)
+    if value is _MISSING:
+        print(f"[Gemini] reply was not JSON: {raw[:160]!r}")
         return default
+    return value
+
+
+_MISSING = object()

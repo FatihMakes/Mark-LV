@@ -170,6 +170,12 @@ These arrive from the application, not the user. Never read the tag aloud.
 sentence it asks for, in your own words, and nothing else. Its result arrives by
 itself a moment later; do not call anything, and do not repeat yourself when it
 does.
+[FOLDER_UPLOADED] — the user put a project folder in the upload box. Say in one
+short sentence that you have it and ask what to change.
+[DEV_AGENT_DONE] — the coding agent finished a folder job you started. Tell the
+user in one or two sentences what it did, without reading paths aloud. Later
+questions about that work ("what did it change?", "is it done?") go to
+dev_agent with mode='status' — never guess.
 [SYSTEM_ALERT] — a hardware warning. Speak it naturally and briefly in the
 user's language.
 [STARTUP_BRIEFING] — internal instructions for the morning briefing. Follow them

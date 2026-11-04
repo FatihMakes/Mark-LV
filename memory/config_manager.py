@@ -150,6 +150,23 @@ def save_hud_style(style: str) -> None:
     _save_flag("hud_style", s if s in HUD_STYLES else "face")
 
 
+def get_ui_scale() -> float:
+    """How much larger than designed the whole interface is drawn, or 0 for
+    'work it out from the screen'.
+
+    Read once, before the window exists — Qt only takes a scale factor at
+    start-up, so a change here applies on the next launch."""
+    try:
+        v = float(load_api_keys().get("ui_scale", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(v, 3.0) if v >= 0.5 else 0.0
+
+
+def save_ui_scale(scale: float) -> None:
+    _save_flag("ui_scale", float(scale or 0))
+
+
 # ── Live-session tuning ──────────────────────────────────────────────────────
 # Everything here is optional and has a working default, so an untouched
 # config behaves exactly like a configured one. Each value is also a way out:
@@ -397,10 +414,53 @@ PROVIDER_MODE_GEMINI = "gemini"      # the conversation runs on the Live API
 PROVIDER_MODE_PIPELINE = "pipeline"  # STT -> LLM -> TTS, assembled from providers
 
 
+def _upgrade_ids(block: dict) -> dict:
+    """Give every catalog service its own id and its own stored settings.
+
+    One provider serves Ollama, OpenAI, MiniMax and a dozen more, and they used
+    to share ONE block of settings under "openai_compat" — so the fallback and
+    ② THINKING could not be two different services, picking one overwrote the
+    other's address, and an API key typed for MiniMax was sent to OpenAI after
+    a switch. Each service is now "<provider>@<entry>", e.g.
+    "openai_compat@minimax", with settings of its own.
+
+    An older config is converted as it is read, not by a migration step: the
+    shared block moves to the service its "catalog" key names (its key belonged
+    to that service and nothing else), and every reference to it follows.
+    Writing the providers block back persists it; until then nothing on disk
+    changes."""
+    creds = block.get("creds")
+    if not isinstance(creds, dict):
+        return block
+    creds = dict(creds)
+    moved: dict = {}
+    for pid, cfg in list(creds.items()):
+        if "@" in pid or not isinstance(cfg, dict):
+            continue
+        eid = str(cfg.get("catalog") or "").strip()
+        if not eid:
+            continue
+        new = f"{pid}@{eid}"
+        creds.setdefault(new, dict(cfg))
+        del creds[pid]
+        moved[pid] = new
+    if not moved:
+        return block
+    block = dict(block)
+    block["creds"] = creds
+    pipe = block.get("pipeline")
+    if isinstance(pipe, dict):
+        block["pipeline"] = {k: moved.get(v, v) for k, v in pipe.items()}
+    for key in ("sidecar", "coding"):
+        if block.get(key) in moved:
+            block[key] = moved[block[key]]
+    return block
+
+
 def get_providers() -> dict:
     """The whole providers block, or an empty dict."""
     val = load_api_keys().get("providers")
-    return dict(val) if isinstance(val, dict) else {}
+    return _upgrade_ids(dict(val)) if isinstance(val, dict) else {}
 
 
 def get_provider_mode() -> str:
@@ -482,6 +542,20 @@ def save_sidecar_provider(provider_id: str) -> None:
     _patch_providers(sidecar=(provider_id or "").strip())
 
 
+def get_coding_provider() -> str:
+    """The service dev_agent writes code with, or '' to use whatever answers
+    background requests.
+
+    Its own setting because coding is the one background job where the model
+    matters most and the request is longest — somebody may well want a strong
+    coding model there and something cheap and fast for reading the screen."""
+    return str(get_providers().get("coding", "") or "").strip()
+
+
+def save_coding_provider(provider_id: str) -> None:
+    _patch_providers(coding=(provider_id or "").strip())
+
+
 def get_sidecar_first() -> bool:
     """Whether the side-call provider is tried BEFORE Gemini rather than after.
 
@@ -499,7 +573,8 @@ def save_sidecar_first(enabled: bool) -> None:
 
 
 def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
-                   sidecar: str = None, sidecar_first: bool = None) -> None:
+                   sidecar: str = None, sidecar_first: bool = None,
+                   coding: str = None) -> None:
     """Write the whole providers block in ONE file write.
 
     The settings panel used to call five setters in a row — one per provider's
@@ -523,7 +598,7 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
             data = {}
 
     block = data.get("providers")
-    block = dict(block) if isinstance(block, dict) else {}
+    block = _upgrade_ids(dict(block)) if isinstance(block, dict) else {}
 
     if mode is not None:
         m = str(mode).strip().lower()
@@ -547,6 +622,8 @@ def save_providers(mode: str = None, pipeline: dict = None, creds: dict = None,
         block["sidecar"] = str(sidecar or "").strip()
     if sidecar_first is not None:
         block["sidecar_first"] = bool(sidecar_first)
+    if coding is not None:
+        block["coding"] = str(coding or "").strip()
 
     data["providers"] = block
     CONFIG_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")

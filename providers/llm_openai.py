@@ -59,6 +59,7 @@ PRESETS: dict[str, str] = {
     "OpenRouter":           "https://openrouter.ai/api/v1",
     "Together":             "https://api.together.xyz/v1",
     "Cerebras":             "https://api.cerebras.ai/v1",
+    "MiniMax":              "https://api.minimax.io/v1",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -99,46 +100,57 @@ PRESETS: dict[str, str] = {
 # gain. Anybody can change or clear it under MORE.
 _LOCAL_BUDGET = {"max_tools": "14", "max_tool_chars": "12000"}
 
+# What every entry resets when it is picked. All of these share ONE stored
+# config, so without it the model name from the last service carried over —
+# "qwen3:8b" sent to OpenAI is a 404 — and Ollama's tool budget followed the
+# user to a cloud model that has no use for it.
+_LOCAL = {"model": "", **_LOCAL_BUDGET}
+_CLOUD = {"model": "", "max_tools": "", "max_tool_chars": ""}
+
 CATALOG = (
     {"id": "ollama",     "label": "Ollama",
      "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["Ollama"], **_LOCAL_BUDGET}},
+     "values": {"base_url": PRESETS["Ollama"], **_LOCAL}},
     {"id": "lmstudio",   "label": "LM Studio",
      "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["LM Studio"], **_LOCAL_BUDGET}},
+     "values": {"base_url": PRESETS["LM Studio"], **_LOCAL}},
     {"id": "llamacpp",   "label": "llama.cpp",
      "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["llama.cpp server"], **_LOCAL_BUDGET}},
+     "values": {"base_url": PRESETS["llama.cpp server"], **_LOCAL}},
     {"id": "vllm",       "label": "vLLM",
      "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["vLLM"], **_LOCAL_BUDGET}},
+     "values": {"base_url": PRESETS["vLLM"], **_LOCAL}},
     {"id": "jan",        "label": "Jan",
      "note": "on this computer · free", "local": True,
-     "values": {"base_url": PRESETS["Jan"], **_LOCAL_BUDGET}},
+     "values": {"base_url": PRESETS["Jan"], **_LOCAL}},
+    {"id": "minimax",    "label": "MiniMax",
+     "note": "cloud · needs a key", "local": False,
+     "values": {"base_url": PRESETS["MiniMax"], **_CLOUD,
+                "model": "MiniMax-M3.1-Flash"}},
     {"id": "groq",       "label": "Groq",
      "note": "cloud · very fast · free tier", "local": False,
-     "values": {"base_url": PRESETS["Groq"]}},
+     "values": {"base_url": PRESETS["Groq"], **_CLOUD}},
     {"id": "openai",     "label": "OpenAI",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["OpenAI"]}},
+     "values": {"base_url": PRESETS["OpenAI"], **_CLOUD}},
     {"id": "deepseek",   "label": "DeepSeek",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["DeepSeek"]}},
+     "values": {"base_url": PRESETS["DeepSeek"], **_CLOUD}},
     {"id": "mistral",    "label": "Mistral",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["Mistral"]}},
+     "values": {"base_url": PRESETS["Mistral"], **_CLOUD}},
     {"id": "xai",        "label": "xAI (Grok)",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["xAI"]}},
+     "values": {"base_url": PRESETS["xAI"], **_CLOUD}},
     {"id": "openrouter", "label": "OpenRouter",
      "note": "cloud · many models behind one key", "local": False,
-     "values": {"base_url": PRESETS["OpenRouter"]}},
+     "values": {"base_url": PRESETS["OpenRouter"], **_CLOUD}},
     {"id": "together",   "label": "Together",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["Together"]}},
+     "values": {"base_url": PRESETS["Together"], **_CLOUD}},
     {"id": "cerebras",   "label": "Cerebras",
      "note": "cloud · needs a key", "local": False,
-     "values": {"base_url": PRESETS["Cerebras"]}},
+     "values": {"base_url": PRESETS["Cerebras"], **_CLOUD}},
     {"id": "custom",     "label": "Something else",
      "note": "type the address yourself", "local": None,
      "values": {}},
@@ -397,6 +409,12 @@ class OpenAICompatLLM:
             body["tool_choice"] = "auto"
         if temperature is not None:
             body["temperature"] = temperature
+        if "minimax" in self.base:
+            # MiniMax's M2 models put their thinking inline as <think>…</think>
+            # unless asked not to. The pipeline filters that out of speech, but
+            # `complete()` feeds background requests that have no such filter —
+            # so it is moved out of the answer at the source.
+            body["reasoning_split"] = True
         return body
 
     # -- one-shot, synchronous: this is what core/gemini.py's ladder uses ----
@@ -644,7 +662,7 @@ PROVIDER = {
     "id": "openai_compat",
     "kind": "llm",
     "label": "OpenAI-compatible",
-    "hint": "Ollama · LM Studio · llama.cpp · vLLM · Groq · DeepSeek · OpenRouter · OpenAI",
+    "hint": "Ollama · LM Studio · llama.cpp · vLLM · Groq · DeepSeek · OpenRouter · OpenAI · MiniMax",
     # httpx ships with google-genai, so this is always true — checked anyway,
     # because a provider must never raise during discovery.
     "requires": ("httpx",),
@@ -661,7 +679,7 @@ PROVIDER = {
         # field typeable so an unlisted model can still be entered. Declared as
         # plain text it rendered as a box LIST had nothing to populate.
         Field("model", "Model", kind="choice", choices=(),
-              hint="Press LIST to read the models this server offers"),
+              hint="Filled in from the server — press REFRESH if it is empty"),
         Field("api_key", "API key", kind="secret", required=False,
               hint="Local servers usually need none"),
         # Filled in by TEST, not asked. The user is the wrong person to ask
