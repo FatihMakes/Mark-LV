@@ -169,14 +169,23 @@ class GestureEngine:
             return
         self._release_mouse()
 
-        # Two raised fingers: vertical hand motion scrolls the active window.
+        # Two raised fingers: vertical movement scrolls; a deliberate
+        # horizontal displacement switches tabs. Cooldown prevents repeats.
         if index_up and middle_up and not ring_up and not pinky_up:
             y = (index.y + middle.y) / 2
-            if self._last_y is not None:
-                delta = self._last_y - y
-                if abs(delta) > 0.012:
-                    pyautogui.scroll(max(-5, min(5, int(delta * 100))))
-            self._last_y = y
+            x = (index.x + middle.x) / 2
+            if self._last_y is not None and self._last_x is not None:
+                dy = self._last_y - y
+                dx = x - self._last_x
+                if abs(dx) > 0.16 and self._cooldown(0.9):
+                    if dx < 0:
+                        pyautogui.hotkey("ctrl", "shift", "tab")
+                    else:
+                        pyautogui.hotkey("ctrl", "tab")
+                    self._emit("TWO-FINGER SWIPE — previous/next tab")
+                elif abs(dy) > 0.012:
+                    pyautogui.scroll(max(-5, min(5, int(dy * 100))))
+            self._last_y, self._last_x = y, x
             return
         self._last_y = None
 
