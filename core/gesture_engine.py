@@ -107,26 +107,74 @@ class GestureEngine:
                 raise RuntimeError("Could not open the webcam. Check camera permissions.")
 
             self.on_status("ACTIVE — webcam hand tracking")
-            hands_api = mp.solutions.hands
-            with hands_api.Hands(
-                static_image_mode=False, max_num_hands=2,
-                model_complexity=0, min_detection_confidence=0.65,
-                min_tracking_confidence=0.6
-            ) as tracker:
-                while not self._stop.is_set():
-                    ok, frame = cap.read()
-                    if not ok:
-                        time.sleep(0.03)
-                        continue
-                    frame = cv2.flip(frame, 1)
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    result = tracker.process(rgb)
-                    if result.multi_hand_landmarks:
-                        hand = result.multi_hand_landmarks[0]
-                        self._process_hand(hand, pyautogui)
-                    else:
-                        self._release_mouse()
-                    time.sleep(0.008)
+
+            # MediaPipe 1.x uses the Tasks API; older 0.10 releases expose
+            # the legacy solutions API. Support either without downgrading.
+            if hasattr(mp, "solutions") and hasattr(mp.solutions, "hands"):
+                hands_api = mp.solutions.hands
+                with hands_api.Hands(
+                    static_image_mode=False, max_num_hands=2,
+                    model_complexity=0, min_detection_confidence=0.65,
+                    min_tracking_confidence=0.6
+                ) as tracker:
+                    while not self._stop.is_set():
+                        ok, frame = cap.read()
+                        if not ok:
+                            time.sleep(0.03)
+                            continue
+                        frame = cv2.flip(frame, 1)
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        result = tracker.process(rgb)
+                        if result.multi_hand_landmarks:
+                            self._process_hand(result.multi_hand_landmarks[0], pyautogui)
+                        else:
+                            self._release_mouse()
+                        time.sleep(0.008)
+            elif hasattr(mp, "tasks") and hasattr(mp.tasks, "vision"):
+                from pathlib import Path
+                from urllib.request import urlretrieve
+                from types import SimpleNamespace
+
+                model_path = Path(__file__).with_name("hand_landmarker.task")
+                if not model_path.is_file():
+                    self.on_status("Downloading hand tracking model…")
+                    model_url = (
+                        "https://storage.googleapis.com/mediapipe-models/"
+                        "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+                    )
+                    urlretrieve(model_url, str(model_path))
+
+                vision = mp.tasks.vision
+                options = vision.HandLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path)),
+                    running_mode=vision.RunningMode.VIDEO,
+                    num_hands=2,
+                    min_hand_detection_confidence=0.65,
+                    min_hand_presence_confidence=0.6,
+                    min_tracking_confidence=0.6,
+                )
+                with vision.HandLandmarker.create_from_options(options) as tracker:
+                    while not self._stop.is_set():
+                        ok, frame = cap.read()
+                        if not ok:
+                            time.sleep(0.03)
+                            continue
+                        frame = cv2.flip(frame, 1)
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                        timestamp_ms = time.monotonic_ns() // 1_000_000
+                        result = tracker.detect_for_video(mp_image, timestamp_ms)
+                        if result.hand_landmarks:
+                            hand = SimpleNamespace(landmark=result.hand_landmarks[0])
+                            self._process_hand(hand, pyautogui)
+                        else:
+                            self._release_mouse()
+                        time.sleep(0.008)
+            else:
+                raise RuntimeError(
+                    "This MediaPipe install has neither solutions.hands nor tasks. "
+                    "Reinstall MediaPipe with: python -m pip install --upgrade mediapipe"
+                )
         except Exception as exc:
             self.on_status("ERROR — " + str(exc)[:180])
             self._emit("Gesture control stopped: " + str(exc))
