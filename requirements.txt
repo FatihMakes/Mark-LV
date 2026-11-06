@@ -102,6 +102,7 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 #   pip install pydub        # file_processor: audio metadata and conversion
 #                            #   (also needs ffmpeg on PATH for most formats)
 #   pip install mediapipe    # pushup_counter: elbow-angle rep detection
+#                            # Gesture Studio: webcam hand landmark tracking
 
 # ── Optional: running the assistant on your own models ───────────────────────
 # ⚙ → ENGINE & PROVIDERS lets you replace Gemini Live with your own speech
