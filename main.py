@@ -1396,7 +1396,10 @@ class JarvisLive:
 
             elif name == "close_camera":
                 self.ui.stop_camera_stream()
-                result = "Camera closed."
+                self._vision_cam_active = False
+                self._vision_close_pending = False
+                self._vision_busy = False
+                result = "Camera closed. The live webcam preview has been stopped."
 
             elif name == "system_status":
                 r = await loop.run_in_executor(None, get_system_status)
@@ -1675,13 +1678,9 @@ class JarvisLive:
             turn_complete=True,
         )
 
-        if self._vision_cam_active:
-            # Camera: stay busy until JARVIS has finished speaking the answer,
-            # then close the preview.
-            self._vision_cam_active    = False
-            self._vision_close_pending = True
-        else:
-            self._vision_busy = False
+        # Keep the live camera preview open after image analysis. It is
+        # stopped only by an explicit close_camera request or the HUD close button.
+        self._vision_busy = False
         return True
 
     async def _receive_audio(self):
@@ -1794,14 +1793,7 @@ class JarvisLive:
                                     }))
                             out_buf = []
 
-                            if self._vision_close_pending:
-                                # This turn_complete IS the vision answer — close camera + release busy flag
-                                self._vision_close_pending = False
-                                self._vision_busy = False
-                                async def _cam_close():
-                                    await asyncio.sleep(2.0)
-                                    self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
+                            # Live camera preview remains open until the user explicitly closes it.
 
                     if response.tool_call:
                         fn_responses = []
