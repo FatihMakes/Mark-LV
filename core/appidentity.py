@@ -271,6 +271,81 @@ def own_exes(chain: Optional[set[int]] = None) -> set[str]:
     return _OWN_EXES
 
 
+_SELF_EXES: Optional[set[str]] = None
+
+
+def _ancestor_pids() -> set[int]:
+    """This process and the ones it came from. NOT the ones it started.
+
+    THE DISTINCTION THIS EXISTS TO DRAW, AND WHAT IGNORING IT COST
+        `_chain_pids()` below answers "what must never be closed", and for that
+        question a descendant belongs in the set: a helper this process spawned
+        is the assistant's own machinery.
+
+        It is the wrong answer to a completely different question — "is this
+        process the assistant" — and the two were sharing one implementation.
+        Every application the assistant LAUNCHES becomes a descendant at the
+        instant it exists, so `open_app` and `browser_control` were making their
+        own results unreadable: the thing they had just started was classified
+        as us and hidden from every search meant to find it.
+
+        Measured, with nine live chrome.exe processes on screen: after the
+        assistant launched Chrome, `running("chrome")` returned nothing, the
+        browser tool reported `browser_running=false` about a browser the user
+        was looking at, and `screenview` refused to read the Chrome window on
+        the grounds that it was the assistant's own.
+
+        Worse than either, because `own_exes()` collects the EXECUTABLES of the
+        chain: one launch put chrome.exe into the set of "our own binaries", so
+        every other copy of Chrome on the machine became us too.
+
+    Ancestors stay in, and they earn it: the terminal that owns this process
+    kills it when it goes, so it is genuinely part of what the assistant is.
+    """
+    pids = {os.getpid()}
+    if not _PSUTIL:
+        return pids
+    try:
+        parent, seen = psutil.Process(os.getpid()).parent(), set()
+        while parent is not None and parent.pid not in seen and parent.pid > 1:
+            seen.add(parent.pid)
+            pids.add(parent.pid)
+            try:
+                parent = parent.parent()
+            except Exception:
+                break
+    except Exception as exc:
+        print(f"[appidentity] could not walk the parent chain: {exc}")
+    return pids
+
+
+def self_exes() -> set[str]:
+    """The executables the assistant IS, lowercased — never the ones it starts.
+
+    The narrow twin of `own_exes()`. That one describes everything that must
+    survive a close request, which includes whatever this process spawned. This
+    one answers identity, so it is built from `_ancestor_pids()` and from
+    `sys.executable`, both of which are fixed for the life of the process and
+    neither of which can be contaminated by launching an application.
+    """
+    global _SELF_EXES
+    if _SELF_EXES is not None:
+        return _SELF_EXES
+    found: set[str] = set()
+    if sys.executable:
+        found.add(os.path.normcase(sys.executable))
+    if _PSUTIL:
+        for pid in _ancestor_pids():
+            try:
+                exe = psutil.Process(pid).exe()
+                if exe:
+                    found.add(os.path.normcase(exe))
+            except Exception:
+                continue
+    _SELF_EXES = found
+    return _SELF_EXES
+
+
 def _chain_pids() -> set[int]:
     """This process, its descendants and its ancestors — no full scan.
 
@@ -507,8 +582,12 @@ def running(spoken: str, include_self: bool = False) -> list[Match]:
     # One pass over the process table, deciding "does this match" and "is this
     # ours" together. Asking `own_pids()` first would walk every process a
     # second time — measured at 418 ms, paid on every request.
-    chain = _chain_pids()
-    ours = own_exes(chain)
+    # IDENTITY, not protection. `_chain_pids()` and `own_exes()` describe what
+    # must never be closed and deliberately include everything this process
+    # started; using them here hid every application the assistant had just
+    # launched from the search meant to find it. See `_ancestor_pids()`.
+    chain = _ancestor_pids()
+    ours = self_exes()
     titles_by_pid = _windows_by_pid()
     out: list[Match] = []
 
@@ -598,12 +677,40 @@ def wait_for_launch(spoken: str, before: set[int],
     `before` is a pid snapshot taken BEFORE launching, so an already-running
     copy is not mistaken for the one we just started. The caller checks for
     that case first and says something different about it.
+
+    WHY THIS ASKS FOR SELF-MATCHES AND FILTERS THEM ITSELF
+        `running()` hides the assistant's own process tree, and `_chain_pids()`
+        counts DESCENDANTS as part of that tree. Both are right for the
+        question they were written for, which is "what may I close" — a helper
+        this process spawned must never be a target.
+
+        They are wrong for this question. `open_app` starts the application
+        from inside the assistant, so the thing we are waiting for IS one of
+        our descendants from the instant it exists. It was therefore hidden
+        from the very search meant to find it, `wait_for_launch` returned None
+        every single time, and `open_app` reported "asked to start but no new
+        application appeared" for applications that were open on screen while
+        it said so.
+
+        Measured directly: launch notepad.exe from a Python process, and
+        `running("notepad")` returns nothing while `running("notepad",
+        include_self=True)` returns it flagged as ours.
+
+        So this asks for everything and applies the one exclusion that is still
+        meaningful here: a process running OUR OWN interpreter. That check is
+        against `sys.executable`'s stem rather than against the set of
+        executables in the process tree, because the tree now contains whatever
+        we just launched — comparing against it would rule out the answer.
     """
+    own = _own_stem()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        for match in running(spoken):
-            if match.pid not in before:
-                return match
+        for match in running(spoken, include_self=True):
+            if match.pid in before:
+                continue
+            if own and fold(os.path.splitext(match.name)[0]) == own:
+                continue        # a helper we spawned, not the application
+            return match
         time.sleep(poll)
     return None
 

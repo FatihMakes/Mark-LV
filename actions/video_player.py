@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import re
 import threading
-import webbrowser
+import time
 from pathlib import Path
+
+from core import outcome
 
 _YT = re.compile(r"(youtube\.com/|youtu\.be/)", re.I)
 
@@ -55,18 +57,95 @@ def _is_url(text: str) -> bool:
     return text.lower().startswith(("http://", "https://", "file://"))
 
 
+_IMAGE_EXTS = {".jpg", ".jpeg", ".jfif", ".png", ".bmp", ".webp", ".gif",
+               ".tif", ".tiff", ".avif", ".heic"}
+_VIDEO_EXTS = {".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".wmv",
+               ".flv", ".mpg", ".mpeg", ".ts", ".3gp", ".ogv"}
+
+
 def _local_path(text: str) -> str:
-    """The text as an existing file on disk, or ''."""
+    """The text as an existing file on disk, or ''. `file://` URIs included."""
+    from urllib.parse import unquote, urlparse
     raw = (text or "").strip().strip('"').strip("'")
+    if raw.lower().startswith("file://"):
+        raw = unquote(urlparse(raw).path)
+        if len(raw) > 2 and raw[0] == "/" and raw[2] == ":":   # file:///C:/x
+            raw = raw[1:]
     if not raw:
         return ""
     try:
         p = Path(raw).expanduser()
-        if p.exists() and p.is_file():
-            return str(p)
+        if p.is_file():
+            return str(p.resolve())
     except Exception:
         pass
     return ""
+
+
+def _looks_like_file(text: str) -> bool:
+    """A path or a file name, as opposed to something to search YouTube for.
+
+    Decided by shape - a folder separator, or a media extension on the end -
+    never by the words around it, so it holds in every language. This is the
+    check that was missing: "holiday.mp4" that was not found on disk fell
+    through to a YouTube search, and from there to the browser.
+    """
+    raw = text.strip().strip('"').strip("'")
+    if raw.lower().startswith("file://"):
+        return True
+    if _is_url(raw):
+        return False
+    suffix = Path(raw).suffix.lower()
+    return ("/" in raw or "\\" in raw
+            or suffix in _IMAGE_EXTS or suffix in _VIDEO_EXTS)
+
+
+def _seconds(value) -> float | None:
+    """A point or a distance in a video: 90, "90", "1:30", "01:02:03" -> seconds."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if ":" in text:
+        try:
+            parts = [float(p) for p in text.split(":")]
+        except ValueError:
+            return None
+        total = 0.0
+        for part in parts:
+            total = total * 60 + part
+        return total
+    m = re.search(r"-?\d+(?:[.,]\d+)?", text)
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
+def _clock(seconds: float) -> str:
+    s = int(max(0, seconds))
+    h, rest = divmod(s, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _show_local(player, path: Path) -> str:
+    """Put a file from this machine on the display: a picture or a video.
+
+    The kind is decided by the file, not by the verb the user used. "Show",
+    "play", "open" and "put on the screen" are one request in every language,
+    and the only honest way to tell a photo from a film is its extension.
+    """
+    if path.suffix.lower() in _IMAGE_EXTS:
+        shower = getattr(player, "show_image", None)
+        if not callable(shower):
+            return outcome.failed("video_player",
+                                  "this build of the display cannot show "
+                                  "pictures", file=path.name)
+        _begin_open()               # a YouTube open still resolving is abandoned
+        shower(str(path), path.name)
+        return f"status=showing image={path.name} where=display"
+    _begin_open()
+    player.show_video(str(path), path.name, muted=True)
+    return f"status=playing file={path.name} where=display sound=muted"
 
 
 def _resolve_youtube(url_or_query: str) -> tuple[str, str, str, str]:
@@ -162,16 +241,16 @@ def _resolve_youtube(url_or_query: str) -> tuple[str, str, str, str]:
     return video["url"], (audio or {}).get("url", ""), info.get("title") or "", ""
 
 
-def _search_page(query: str) -> str:
-    from urllib.parse import quote_plus
-    return f"https://www.youtube.com/results?search_query={quote_plus(query)}"
-
-
 def video_player(parameters: dict = None, response=None, player=None,
                  session_memory=None) -> str:
     params = parameters or {}
     action = (params.get("action") or "play").strip().lower()
-    source = (params.get("source") or "").strip()
+    # `source` is the declared name; a model that has just read another tool's
+    # answer often says `path` or `url` instead, and refusing over the key name
+    # is a failure the user cannot see the cause of.
+    source = str(params.get("source") or params.get("path")
+                 or params.get("url") or params.get("file")
+                 or params.get("query") or "").strip()
 
     if player is None:
         return "There is no display to play a video on."
@@ -185,7 +264,7 @@ def video_player(parameters: dict = None, response=None, player=None,
         player.stop_video()
         if was_opening:
             return "Stopped it before it opened."
-        return "Closed the video."
+        return "Closed what was on the display."
 
     # ---- sound ------------------------------------------------------------
     if action in ("mute", "unmute", "sound_on", "sound_off"):
@@ -195,19 +274,93 @@ def video_player(parameters: dict = None, response=None, player=None,
         player.set_video_muted(muted)
         return "Muted the video." if muted else "Turned the video's sound on."
 
-    # ---- play -------------------------------------------------------------
+    # ---- position and pause -----------------------------------------------
+    # Exact, because the display's own player knows where it is. Checked after:
+    # the answer is the position the player reports, not the one that was asked.
+    if action in ("seek", "forward", "back", "rewind", "seek_to", "pause", "resume"):
+        state = player.video_state() if callable(getattr(player, "video_state", None)) else {}
+        if state.get("kind") != "video":
+            return outcome.failed(
+                "video_player",
+                "no video is playing on the assistant's display - for a video in another "
+                "app or the browser, use computer_settings (seek_forward, seek_backward, "
+                "media_play_pause)", wanted=action)
+
+        if action in ("pause", "resume"):
+            player.pause_video(action == "pause")
+            time.sleep(0.4)
+            after = player.video_state()
+            if bool(after.get("paused")) == (action == "pause"):
+                return outcome.done("video_player", wanted=action,
+                                    position=_clock(after.get("position") or 0), verified=True)
+            return outcome.unverified("video_player", "the player has not reported the change yet",
+                                      wanted=action)
+
+        amount = _seconds(params.get("seconds"))
+        if action == "seek_to":
+            target = _seconds(params.get("position"))
+            if target is None:
+                target = amount
+            if target is None:
+                return outcome.ask("video_player", "to which point in the video (minutes:seconds)?")
+            relative = False
+        else:
+            if amount is None:
+                amount = 10.0
+            if action in ("back", "rewind"):
+                amount = -abs(amount)
+            elif action == "forward":
+                amount = abs(amount)
+            target, relative = amount, True
+
+        duration = float(state.get("duration") or 0)
+        expected = (float(state.get("position") or 0) + target) if relative else target
+        if duration:
+            expected = min(expected, duration)
+        expected = max(0.0, expected)
+        player.seek_video(float(target), relative)
+        time.sleep(0.5)
+        now = float(player.video_state().get("position") or 0)
+        if abs(now - expected) <= 3:
+            return outcome.done("video_player", wanted=action, position=_clock(now),
+                                duration=_clock(duration) if duration else None, verified=True)
+        return outcome.unverified(
+            "video_player",
+            "the jump was sent but the player has not reached that point yet - a stream "
+            "may still be buffering", wanted=action, position=_clock(now), asked=_clock(expected))
+
+    # ---- play / show ------------------------------------------------------
     if not source:
-        return "What should I play?"
+        return outcome.ask("video_player", "what should I play or show?")
+
+    # WHERE the user meant is the model's call, because it is a question about
+    # what they SAID, in whatever language they said it in. This file only
+    # acts on the answer: a file request never reaches YouTube or the browser.
+    where = (params.get("source_type") or "auto").strip().lower()
+    wants_file = where in ("file", "local", "computer", "disk")
 
     local = _local_path(source)
     if local:
-        player.show_video(local, Path(local).name, muted=True)
-        return f"Playing {Path(local).name} on the display, muted."
+        return _show_local(player, Path(local))
 
-    # A direct media URL can go straight to the player; a YouTube page cannot.
+    if wants_file or _looks_like_file(source):
+        return outcome.failed(
+            "video_player",
+            f"there is no file at '{source}'. If the exact path is not known, "
+            f"find it with file_controller (action='find') and call again with "
+            f"the path it returns", asked=source)
+
     if _is_url(source) and not _YT.search(source):
+        if Path(source.split("?")[0]).suffix.lower() in _IMAGE_EXTS:
+            return outcome.failed(
+                "video_player",
+                "a picture on the web cannot be shown on the display, only a "
+                "file on this computer - offer to open it in the browser",
+                url=source)
+        # A direct media URL can go straight to the player; a YouTube page cannot.
+        _begin_open()
         player.show_video(source, source.rsplit("/", 1)[-1][:44], muted=True)
-        return "Playing that on the display, muted."
+        return "status=playing where=display sound=muted"
 
     # ANSWER FIRST, OPEN SECOND.
     #
@@ -248,19 +401,18 @@ def _play_youtube(player, source: str, token: int) -> None:
         except Exception as e:                              # noqa: BLE001
             err = str(e)
 
-    # Resolution failed. Opening it in a browser is worse than playing it in the
-    # HUD, but it is a great deal better than doing nothing, and the reason is
-    # reported rather than swallowed.
-    page = source if _YT.search(source) else _search_page(source)
-    opened = ""
-    try:
-        webbrowser.open(page)
-        opened = " and it has been opened in the browser instead"
-    except Exception:
-        pass
-    _say(player, "Tell the user, in one short sentence in their own language: "
-                 f"'{source}' could not be played on the display "
-                 f"({err}){opened}.")
+    # Resolution failed, and the reason is reported rather than swallowed.
+    #
+    # This used to open a browser on its own, and in use that was the worst
+    # thing it did: a request to watch something ON THE DISPLAY turned into a
+    # browser window appearing unasked, very often for a search page built
+    # out of the name of a file that was on the user's own disk. Whether to go
+    # to the browser instead is the user's decision, so it is offered, not
+    # taken — `browser_control` is one sentence away if they want it.
+    _say(player, "Tell the user, in one short sentence in their own language, "
+                 f"that '{source}' could not be played on the display ({err}). "
+                 "Offer to open it in the browser instead; do NOT open it "
+                 "unless they say yes.")
 
 
 def _say(player, instruction: str) -> None:
@@ -275,45 +427,73 @@ def _say(player, instruction: str) -> None:
 TOOL = {
     "name": "video_player",
     "description": (
-        "If user wants to open a video on YouTube, he will tell you that specifically"
-        "If user wants to play a video, then he wants to call this feature"
-        "Plays a VIDEO on the assistant's own display, where the avatar "
-        "normally is — and stops it, mutes it or unmutes it. Use whenever the "
-        "user wants to WATCH something on screen: 'play the new Dune trailer', "
-        "'play that video', 'play C:/clips/holiday.mp4', 'put that YouTube "
-        "video on the screen', 'stop the video', 'videoyu kapat', 'turn the "
-        "sound on', 'sesi aç', 'mute it'. Accepts a local file path, a direct "
+        "Puts a VIDEO or a PICTURE on the assistant's own display, where the "
+        "avatar normally is - and closes it, mutes it or unmutes it. Use it "
+        "whenever the user wants to watch or look at something on screen, "
+        "whatever words or language they use for it. "
+        "'source' accepts the full path of a file on this computer, a direct "
         "video URL, a YouTube link, or a description to search YouTube for. "
-        "Video always starts MUTED — only call action='unmute' when the user "
-        "actually asks to hear it. "
-        "This returns the moment it is asked, before the picture appears: when "
-        "it answers 'status=opening', say in one short sentence that you are "
-        "putting it on the display, and do not wait or call it again. "
-        "Do NOT use 'youtube_video' for this: that optional plugin opens videos "
-        "in the web browser and summarises transcripts, it never plays anything "
-        "on the assistant's display."
+        "For a file, copy its path exactly from the tool that produced it; if "
+        "you do not have the path, find the file with file_controller "
+        "action='find' first - never invent one. Pictures (including one "
+        "generate_image just made) are shown; videos play. "
+        "Set 'source_type' from what the user MEANT: 'file' when it is "
+        "something on their own computer, 'web' when they mean YouTube or "
+        "something online, 'auto' when they did not say. "
+        "Video always starts MUTED - only call action='unmute' when the user "
+        "actually asks to hear it. action='stop' closes a picture as well. "
+        "While a video is on the display: 'forward' / 'back' with seconds "
+        "('skip 30 seconds' -> forward, seconds=30; no amount = 10), 'seek_to' "
+        "with position ('go to 1:20' -> position='1:20'), 'pause', 'resume'. "
+        "When it answers 'status=opening', say in one short sentence that you "
+        "are putting it on the display, and do not wait or call it again. "
+        "If it fails, report why; never open a browser instead unless the user "
+        "asks for that. Do NOT use 'youtube_video' for this: that plugin works "
+        "in the web browser and never shows anything on this display."
     ),
     # Used in place of `description` only when a small model is on a tool
     # budget - Gemini still gets the full text. See providers/schema.py.
     "brief": (
-        "Plays a video on the HUD - a YouTube link, a local file, a URL, or a description to search for."
+        "Shows a picture or plays a video on the HUD - a file path on this "
+        "computer, a URL, a YouTube link, or a description to search for. "
+        "source_type: file | web | auto."
     ),
     "parameters": {
         "type": "OBJECT",
         "properties": {
             "action": {
                 "type": "STRING",
-                "description": ("'play' (default), 'stop' to close it, 'unmute' "
-                                "to turn the sound on, 'mute' to silence it."),
-                "enum": ["play", "stop", "mute", "unmute"],
+                "description": ("'play' (default; also shows pictures), 'stop' "
+                                "to close it, 'unmute' to turn the sound on, "
+                                "'mute' to silence it, 'forward' / 'back' by "
+                                "seconds, 'seek_to' a position, 'pause', 'resume'."),
+                "enum": ["play", "stop", "mute", "unmute", "forward", "back",
+                         "seek_to", "pause", "resume"],
+            },
+            "seconds": {
+                "type": "NUMBER",
+                "description": "For forward / back: how many seconds (default 10).",
+            },
+            "position": {
+                "type": "STRING",
+                "description": "For seek_to: where to go, as minutes:seconds ('1:20') or seconds.",
             },
             "source": {
                 "type": "STRING",
                 "description": (
-                    "For action='play': a local file path, a direct video URL, "
-                    "a YouTube link, or what to search YouTube for. Pass what "
-                    "the user actually named, in their own words."
+                    "For action='play': a file path on this computer, a direct "
+                    "video URL, a YouTube link, or what to search "
+                    "YouTube for. Pass what the user actually named, in their "
+                    "own words."
                 ),
+            },
+            "source_type": {
+                "type": "STRING",
+                "description": (
+                    "Where the user means it is: 'file' on this computer, "
+                    "'web' for YouTube or online, 'auto' if they did not say."
+                ),
+                "enum": ["auto", "file", "web"],
             },
         },
         "required": ["action"],

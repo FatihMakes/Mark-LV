@@ -221,7 +221,11 @@ def _press(key: str) -> str:
 def _scroll(direction: str = "down", amount: int = 3) -> str:
     _require_pyautogui()
     vertical   = direction in ("up", "down")
-    clicks     = amount if direction in ("up", "right") else -amount
+    amount     = max(1, min(60, abs(int(amount))))
+    # `amount` is wheel notches. pyautogui counts 1/120 of a notch on Windows and
+    # whole notches elsewhere, so "scroll 3" moved the page by nothing on Windows.
+    units      = amount * 120 if sys.platform == "win32" else amount
+    clicks     = units if direction in ("up", "right") else -units
     pyautogui.scroll(clicks) if vertical else pyautogui.hscroll(clicks)
     return f"Scrolled {direction} ×{amount}"
 

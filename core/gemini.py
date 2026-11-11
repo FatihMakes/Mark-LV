@@ -154,22 +154,33 @@ PROVIDER_PREFIX = "prov:"
 # The three that fail sit at the BOTTOM rather than being deleted: they are
 # real quota when they are healthy, and a rung that is down is set aside by the
 # cooldown after one attempt instead of being paid for on every call.
+#
+# Re-measured for Mark LVII (2026-09-15), same key:
+#     gemini-2.5-flash / -lite   404 "no longer available to new users"
+#     gemini-3.5-flash-lite      0.56s      gemini-flash-lite-latest  0.59s
+#     gemini-3.6-flash           2.52s, then a 504 after 19s
+#     gemini-3.8-flash           6.48s      gemini-flash-latest       5.45s
+#     gemini-3.1-flash-lite      7.51s      gemini-3.7-flash          503
+#     gemini-3.5-flash           504, then 429
+# The 2.5 models moved from the top to the bottom: every launch paid a 404 for
+# each before reaching one that answers. They stay on the ladder because keys
+# created before their retirement can still use them.
 _LADDERS = {
     FAST: (LIVE,
-           "gemini-2.5-flash-lite", "gemini-3.5-flash-lite",
-           "gemini-3.1-flash-lite", "gemini-flash-lite-latest",
-           "gemini-2.5-flash", "gemini-3.5-flash",
-           "gemini-3.6-flash", "gemini-3-flash-preview"),
+           "gemini-3.5-flash-lite", "gemini-flash-lite-latest",
+           "gemini-3.1-flash-lite", "gemini-3.5-flash",
+           "gemini-3.6-flash", "gemini-3.8-flash", "gemini-flash-latest",
+           "gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemini-2.5-flash"),
     SMART: (LIVE,
-            "gemini-2.5-flash", "gemini-3.5-flash",
-            "gemini-2.5-flash-lite", "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-flash-latest"),
+            "gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash",
+            "gemini-flash-latest", "gemini-3.7-flash",
+            "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"),
     # Grounded search needs response.candidates[...].grounding_metadata, which a
     # Live turn does not produce. REST only, and it says so rather than silently
     # returning an answer with no sources behind it.
-    SEARCH: ("gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite",
-             "gemini-flash-latest"),
+    SEARCH: ("gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash",
+             "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"),
 }
 
 # The conversation's own model, and ONE careful fallback behind it.
@@ -251,12 +262,53 @@ _GONE_SECONDS = 6 * 60 * 60
 # but long enough that the fourteen-second wait is paid once, not repeatedly.
 _UNAVAILABLE_SECONDS = 30 * 60
 _cooldown: dict[str, float] = {}
+# The rungs resting because they are not there for this key at all (404, 403) —
+# as opposed to busy. Kept apart so that "every rung is resting" does not put a
+# retired model back in front of a call.
+_gone: set[str] = set()
 _cool_lock = threading.Lock()
 
 
 def _cool(model: str, seconds: float = _COOLDOWN_SECONDS) -> None:
     with _cool_lock:
         _cooldown[model] = time.monotonic() + seconds
+        if seconds >= _GONE_SECONDS:
+            _gone.add(model)
+        else:
+            _gone.discard(model)
+
+
+def usable_rungs(ladder) -> list:
+    """The rungs worth trying now, in ladder order.
+
+    Normally that is every rung not resting. When EVERY rung is resting, this
+    used to answer "try them all again" — so a 404 from a model retired for this
+    key and a fourteen-second 504 were paid again in front of the one call that
+    might have worked. Now the rungs resting for a passing reason (quota,
+    overload) are tried, the soonest back first, and a model that is gone for
+    this key is only retried when nothing else is left: the key may have changed.
+    """
+    ladder = list(ladder)
+    ready = [m for m in ladder if not _cooling(m)]
+    if ready:
+        return ready
+    with _cool_lock:
+        passing = sorted((m for m in ladder if m not in _gone),
+                         key=lambda m: _cooldown.get(m, 0.0))
+    return passing or ladder
+
+
+def is_key_error(err: str) -> bool:
+    """The API key itself was refused.
+
+    Every Gemini rung shares the key, so no rung is to blame and none may be
+    rested. Before this, a refused key read as "permission" → gone, and every
+    model was set aside for six hours — so a key corrected in the settings kept
+    failing until the app was restarted.
+    """
+    low = err.lower()
+    return ("api key not valid" in low or "api_key_invalid" in low
+            or "api key expired" in low or "invalid api key" in low)
 
 
 def is_quota_error(err: str) -> bool:
@@ -319,6 +371,7 @@ def _cooling(model: str) -> bool:
         if until and time.monotonic() < until:
             return True
         _cooldown.pop(model, None)
+        _gone.discard(model)
         return False
 
 
@@ -330,9 +383,15 @@ def api_key(refresh: bool = False) -> str:
             return _cached_key
         try:
             data = json.loads(_KEY_FILE.read_text(encoding="utf-8"))
-            _cached_key = str(data.get("gemini_api_key") or "")
+            new_key = str(data.get("gemini_api_key") or "")
         except Exception:
-            _cached_key = ""
+            new_key = ""
+        if _cached_key is not None and new_key != _cached_key:
+            # What a model answered to the old key says nothing about the new one.
+            with _cool_lock:
+                _cooldown.clear()
+                _gone.clear()
+        _cached_key = new_key
         return _cached_key
 
 
@@ -712,8 +771,11 @@ def call(contents, tier: str = FAST, config=None,
             return None
 
     cl = None
-    tried = [m for m in ladder if not _cooling(m)] or list(ladder)
+    tried = usable_rungs(ladder)
+    key_refused = False
     for model in tried:
+        if key_refused and not model.startswith(PROVIDER_PREFIX):
+            continue                     # same key, same answer — a provider does not use it
         try:
             if model == LIVE:
                 reply = _live_call(contents, config, timeout_ms, resolved_key)
@@ -730,7 +792,10 @@ def call(contents, tier: str = FAST, config=None,
             return cl.models.generate_content(**kwargs)
         except Exception as e:
             msg = str(e)
-            if is_quota_error(msg):
+            if is_key_error(msg) and not model.startswith(PROVIDER_PREFIX):
+                key_refused = True
+                print(f"[Gemini] the API key was refused — {msg[:120]}")
+            elif is_quota_error(msg):
                 _cool(model)
                 print(f"[Gemini] {model}: out of quota — skipping it for "
                       f"{_COOLDOWN_SECONDS // 60} minutes")
@@ -756,6 +821,22 @@ def text(contents, tier: str = FAST, config=None,
     return (getattr(resp, "text", None) or "").strip() or default
 
 
+def as_json(contents, tier: str = FAST, config=None,
+            timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "", default=None):
+    """`text`, parsed as JSON, tolerating the fences, reasoning and prose a
+    model wraps it in. `default` when nothing answered or the answer would not
+    parse. See parse_json."""
+    raw = text(contents, tier=tier, config=config, timeout_ms=timeout_ms, key=key)
+    if not raw:
+        return default
+    value = parse_json(raw, default=_MISSING)
+    if value is _MISSING:
+        print(f"[Gemini] reply was not JSON: {raw[:160]!r}")
+        return default
+    return value
+
+
+_MISSING = object()
 _THINK_RE = re.compile(r"(?is)<think(?:ing)?>.*?</think(?:ing)?>")
 _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.S)
 
@@ -791,21 +872,3 @@ def parse_json(raw: str, default=None):
                 continue
             return value
     return default
-
-
-def as_json(contents, tier: str = FAST, config=None,
-            timeout_ms: int = DEFAULT_TIMEOUT_MS, key: str = "", default=None):
-    """`text`, parsed as JSON, tolerating the fences, reasoning and prose a
-    model wraps it in. `default` when nothing answered or the answer would not
-    parse. See parse_json."""
-    raw = text(contents, tier=tier, config=config, timeout_ms=timeout_ms, key=key)
-    if not raw:
-        return default
-    value = parse_json(raw, default=_MISSING)
-    if value is _MISSING:
-        print(f"[Gemini] reply was not JSON: {raw[:160]!r}")
-        return default
-    return value
-
-
-_MISSING = object()

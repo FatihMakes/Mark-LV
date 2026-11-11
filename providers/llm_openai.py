@@ -30,6 +30,8 @@ WHAT IS DELIBERATELY NOT HERE
 from __future__ import annotations
 
 import json
+import time
+import contextlib
 from importlib.util import find_spec
 from typing import Any, AsyncIterator, Optional
 
@@ -45,6 +47,11 @@ from .base import DEFAULT_CAPS, Field, FunctionCall
 # resolver before falling back. macOS and most Linux distributions happen to
 # order it the other way, which is exactly why it gets shipped broken — it works
 # on the developer's machine.
+# Spare Gemini models, fastest first, for when the chosen one is out of quota.
+_GEMINI_SPARES = ("gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3-flash-preview",
+                  "gemini-flash-lite-latest")
+_gemini_rest: dict[str, float] = {}     # model -> monotonic time it may be tried again
+
 PRESETS: dict[str, str] = {
     "Ollama":               "http://127.0.0.1:11434/v1",
     "LM Studio":            "http://127.0.0.1:1234/v1",
@@ -60,6 +67,7 @@ PRESETS: dict[str, str] = {
     "Together":             "https://api.together.xyz/v1",
     "Cerebras":             "https://api.cerebras.ai/v1",
     "MiniMax":              "https://api.minimax.io/v1",
+    "Google Gemini":        "https://generativelanguage.googleapis.com/v1beta/openai",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +131,10 @@ CATALOG = (
     {"id": "jan",        "label": "Jan",
      "note": "on this computer · free", "local": True,
      "values": {"base_url": PRESETS["Jan"], **_LOCAL}},
+    {"id": "gemini",     "label": "Google Gemini",
+     "note": "cloud · leave the key empty to use your Gemini key", "local": False,
+     "values": {"base_url": PRESETS["Google Gemini"], **_CLOUD,
+                "model": "gemini-3.5-flash"}},
     {"id": "minimax",    "label": "MiniMax",
      "note": "cloud · needs a key", "local": False,
      "values": {"base_url": PRESETS["MiniMax"], **_CLOUD,
@@ -348,6 +360,15 @@ class OpenAICompatLLM:
         self.base = _normalise(cfg.get("base_url") or "")
         self.model = (cfg.get("model") or "").strip()
         self.key = (cfg.get("api_key") or "").strip()
+        if not self.key and "generativelanguage.googleapis.com" in self.base:
+            # The Gemini entry needs no second key: the one Gemini Live already
+            # uses is the natural choice, and a different key pasted here is how
+            # a free-tier project ends up behind a paid one (20 requests a day).
+            try:
+                from memory.config_manager import get_gemini_key
+                self.key = (get_gemini_key() or "").strip()
+            except Exception:
+                pass
         self.timeout = float(cfg.get("timeout") or 60.0)
 
         # A budget on a model running on your own hardware, unless the user
@@ -409,6 +430,12 @@ class OpenAICompatLLM:
             body["tool_choice"] = "auto"
         if temperature is not None:
             body["temperature"] = temperature
+        if "generativelanguage.googleapis.com" in self.base and "flash" in self.model:
+            # Gemini 3 Flash models think before every answer unless told not
+            # to, which is most of their wait in a spoken turn. Measured
+            # 2026-11-04: 3.5-flash first word ~2.4 s -> ~1.6 s at "low";
+            # the Lite models answer as well with no thinking at all.
+            body["reasoning_effort"] = "none" if "lite" in self.model else "low"
         if "minimax" in self.base:
             # MiniMax's M2 models put their thinking inline as <think>…</think>
             # unless asked not to. The pipeline filters that out of speech, but
@@ -475,11 +502,7 @@ class OpenAICompatLLM:
                 return
 
             buf = _ToolCallBuffer()
-            async with cl.stream("POST", f"{self.base}/chat/completions",
-                                 headers=self._headers(), json=body) as r:
-                if r.status_code >= 400:
-                    detail = _terse((await r.aread()).decode("utf-8", "replace"))
-                    raise RuntimeError(f"{r.status_code} {detail}")
+            async with self._open_stream(cl, body) as r:
                 async for line in r.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -501,6 +524,41 @@ class OpenAICompatLLM:
             calls = buf.drain()
             if calls:
                 yield {"tool_calls": calls}
+
+    def _gemini_order(self) -> list[str]:
+        """The chosen model first, then spares, skipping any resting one.
+
+        Google counts Gemini quotas per model: on a free-tier project the
+        chosen Flash allows 5 requests a minute, and a spoken conversation
+        passes that in one minute. A 429 or 503 on one model says nothing
+        about the next, so the turn moves on instead of failing."""
+        now = time.monotonic()
+        order = [self.model] + [m for m in _GEMINI_SPARES if m != self.model]
+        awake = [m for m in order if _gemini_rest.get(m, 0) <= now]
+        return awake or order
+
+    @contextlib.asynccontextmanager
+    async def _open_stream(self, cl, body: dict):
+        """POST the streaming request; on Gemini, step past a model that is
+        out of quota or overloaded before anything has been said."""
+        gemini = "generativelanguage.googleapis.com" in self.base
+        models = self._gemini_order() if gemini else [body.get("model")]
+        last = ""
+        for model in models:
+            req = dict(body, model=model)
+            if gemini and "flash" in model:
+                req["reasoning_effort"] = "none" if "lite" in model else "low"
+            async with cl.stream("POST", f"{self.base}/chat/completions",
+                                 headers=self._headers(), json=req) as r:
+                if r.status_code < 400:
+                    yield r
+                    return
+                last = f"{r.status_code} {_terse((await r.aread()).decode('utf-8', 'replace'))}"
+                if not gemini or r.status_code not in (429, 503):
+                    raise RuntimeError(last)
+                # a minute's quota or a load spike: rest this model briefly
+                _gemini_rest[model] = time.monotonic() + (60 if r.status_code == 429 else 20)
+        raise RuntimeError(last)
 
     # -- for the settings panel ---------------------------------------------
     def models(self, timeout: float = 8.0) -> list[str]:

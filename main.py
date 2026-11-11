@@ -32,6 +32,15 @@ for _stream in ("stdout", "stderr"):
     except Exception:
         pass          # pythonw / redirected pipes / anything exotic — never fatal
 
+# ── HTTPS trusts the system's roots AND certifi's ────────────────────────────
+# A Windows store that never fetched a root failed every urllib call to that
+# site with an "SSL problem" (CERTIFICATE_VERIFY_FAILED). core/tls.py.
+try:
+    from core import tls as _tls
+    _tls.install()
+except Exception as _e:
+    print(f"[tls] not installed: {type(_e).__name__}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
@@ -328,6 +337,16 @@ def _render_prompt(template: str, values: dict) -> str:
 def _get_api_key() -> str:
     with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)["gemini_api_key"]
+
+
+def _gemini_usable() -> bool:
+    """A Gemini key is stored, and the user has not chosen to run without Gemini."""
+    try:
+        from memory.config_manager import load_api_keys
+        cfg = load_api_keys()
+    except Exception:
+        return False
+    return bool(str(cfg.get("gemini_api_key") or "").strip()) and not cfg.get("local_only")
 
 
 def _load_system_prompt() -> str:
@@ -688,6 +707,48 @@ class JarvisLive:
         self.ui.get_plugin_settings = self._plugin_registry.settings_schemas  # ⚙ settings tab
         self.ui.request_say = self.plugin_say   # plugins: mid-task speech channel
 
+        # Tool access for plugins that ORCHESTRATE other tools rather than doing
+        # a job themselves — screen_agent is the first, and the reason this
+        # exists. A plan that can route "open the browser" to `open_app` instead
+        # of hunting for a desktop icon is both faster and far more likely to
+        # work, and the only thing standing in the way was that a plugin had no
+        # way to reach the registries. They hang on the UI object like every
+        # other capability plugins are given: request_say, get_plugins, the
+        # wake-word controls.
+        #
+        # These run on the CALLER's thread, which for a plugin is its own worker
+        # rather than the event loop, so a long tool does not stall the
+        # conversation. That is the same reason main.py calls the registries
+        # through run_in_executor from its own side.
+        self.ui.tool_catalog = self._tool_catalog
+        self.ui.run_tool     = self._run_tool_for_plugin
+
+        # Background tasks (core/tasks). Attached once request_say exists, so a
+        # finished task can speak; attaching is also what resumes any task a
+        # restart interrupted. A failure here costs the feature, never the app.
+        try:
+            from core.tasks import desktop as _tasks_desktop
+            _tasks_desktop.attach(self.ui)
+        except Exception as e:
+            print(f"[Tasks] background tasks unavailable: {e}")
+
+        # Routines (core/routines): the opening briefing, the check-in, the news
+        # watch and every scheduled thing the user sets up. If they cannot load,
+        # _routines stays None and the fixed schedules they replaced run instead.
+        self._routines = None
+        try:
+            from core.routines import desktop as _routines_desktop
+            self._routines = _routines_desktop.attach(_routines_desktop.CallbackHost(
+                ready=self._routine_ready,
+                idle_seconds=lambda: time.monotonic() - self._last_user_speech,
+                say=self._routine_say,
+                prompt=self.plugin_say,
+                builtin=self._routine_builtin,
+                log=self.ui.write_log,
+            ))
+        except Exception as e:
+            print(f"[Routines] unavailable, using the fixed schedules: {e}")
+
         # ── Wake word ────────────────────────────────────────────────────────
         # _awake gates the mic (see _listen_audio) and the background speakers.
         # It is True whenever wake word is OFF, so default behaviour is unchanged.
@@ -748,6 +809,9 @@ class JarvisLive:
         if not self._awake:
             return
         self._awake = False
+        detector = getattr(self, "_wake_detector", None)
+        if detector is not None:
+            detector.reset()        # nothing heard before sleeping may wake it again
         self.set_speaking(False)
         self.ui.set_state("SLEEPING")
         self.ui.write_log(f"SYS: Sleeping — {reason}. Say 'Hey Jarvis' to wake me.")
@@ -757,6 +821,9 @@ class JarvisLive:
         while True:
             await asyncio.sleep(5)
             if not self._wake_enabled or not self._awake:
+                continue
+            # Asleep with no detector running is asleep for good.
+            if not (self._wake_detector and self._wake_detector.ready):
                 continue
             with self._speaking_lock:
                 speaking = self._is_speaking
@@ -775,7 +842,10 @@ class JarvisLive:
                 return "need_download"
             self._wake_enabled = True
             save_wake_word_enabled(True)
-            self._ensure_wake_detector()
+            if not self._ensure_wake_detector():
+                self.ui.write_log("SYS: Wake word is on, but the detector could not start — "
+                                  "listening normally.")
+                return "enabled"
             self.sleep(reason="wake word enabled")
             return "enabled"
         else:
@@ -799,6 +869,192 @@ class JarvisLive:
         # what they are waiting to see.
         return wake_install(logger=lambda m: print(f"[Wake] {m}"),
                             notify=lambda m: self.ui.write_log(f"SYS: {m}"))
+
+    def _tool_catalog(self) -> list[dict]:
+        """Every tool a plugin could route work to: name, description, schema.
+
+        Built from the same two registries the model's own tool list comes
+        from, so a planner reading this sees exactly what the assistant can
+        actually do — no second list to keep in step, and a plugin dropped in
+        tomorrow appears here on the next launch without anybody editing this
+        method.
+
+        The budget metadata is left on. It is stripped before anything reaches
+        a vendor API, but a planner choosing between tools benefits from the
+        short `brief` when a description runs long.
+        """
+        try:
+            return (self._action_registry.get_tool_declarations()
+                    + self._plugin_registry.get_tool_declarations())
+        except Exception as e:
+            print(f"[ToolCatalog] {e}")
+            return []
+
+    def _run_tool_for_plugin(self, name: str, parameters: dict) -> str:
+        """Run one of the assistant's tools on behalf of an orchestrating plugin.
+
+        WHY THIS IS NOT `_execute_tool`
+            That one belongs to the conversation: it feeds results back into the
+            Live session, honours per-tool scheduling, and runs inside the
+            receive loop. A plugin calling it would be injecting turns into the
+            conversation from a worker thread on behalf of a step the user never
+            asked about individually.
+
+            This is the plain version: run the tool, hand back what it said, let
+            the caller decide what any of it means. The plugin is already
+            narrating its own progress.
+        """
+        # Failures are written in core/outcome's vocabulary, because that is what
+        # the caller reads. A plain "Tool 'x' failed" sentence was counted as a
+        # tool that RAN by the screen agent, which only recognises status lines.
+        from core import outcome
+        parameters = parameters or {}
+        try:
+            if self._action_registry.has(name):
+                return self._action_registry.run(name, parameters,
+                                                 {"player": self.ui})
+            if self._plugin_registry.has(name):
+                return self._plugin_registry.run(name, parameters,
+                                                 player=self.ui,
+                                                 session_memory=None)
+        except Exception as e:
+            return outcome.failed(name, f"the tool raised an error: {e}")
+        return outcome.failed(name, "no tool with this name is available")
+
+    # ── Leaving ─────────────────────────────────────────────────────────────────
+    # Closing the window used to end the process on the spot: the thread holding
+    # the conversation is a daemon and died with the window, so the session
+    # summary — the "last time we talked about…" line the next briefing opens
+    # with — was only written when the user said "shut down" out loud. Both ways
+    # out now go through here, and every step on the way is bounded.
+
+    def _keep_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Hold a reference to a fire-and-forget task: the event loop keeps only
+        a weak one, and a task collected mid-run simply never finishes."""
+        tasks = self.__dict__.setdefault("_bg_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        return task
+
+    async def _wrap_up(self) -> None:
+        try:
+            await asyncio.wait_for(self._save_session_summary(), timeout=12)
+        except Exception as e:
+            print(f"[JARVIS] session summary not saved on exit: {e!r}")
+
+    def _stop_engines(self) -> None:
+        """Routines stop firing; a running background task stops after the round
+        in flight and stays `running` on disk, which the next launch resumes."""
+        try:
+            if getattr(self, "_routines", None) is not None:
+                self._routines.shutdown()
+        except Exception as e:
+            print(f"[Routines] shutdown: {e}")
+        try:
+            from core.tasks import desktop as _tasks_desktop
+            eng = _tasks_desktop.engine()
+            if eng is not None:
+                eng.shutdown(wait=2.0)
+        except Exception as e:
+            print(f"[Tasks] shutdown: {e}")
+
+    def finish(self, timeout: float = 15.0) -> None:
+        """Called on the Qt thread after the window has closed. The window is
+        already gone, so this wait is not something anybody sits through."""
+        loop = getattr(self, "_loop", None)
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(self._wrap_up(), loop).result(timeout)
+            except Exception as e:
+                print(f"[JARVIS] wrap-up cut short: {e!r}")
+        self._stop_engines()
+
+    # ── Routines (core/routines) ─────────────────────────────────────────────────
+    # The engine runs on its own thread and asks through these: can something be
+    # said now, and how to say it. Everything reaches the session the way a
+    # plugin's speech does.
+
+    def _routine_ready(self) -> bool:
+        if not getattr(self, "session", None) or not getattr(self, "_loop", None):
+            return False
+        if not getattr(self, "_awake", False):
+            return False
+        lock = getattr(self, "_speaking_lock", None)
+        if lock is not None:
+            with lock:
+                if self._is_speaking:
+                    return False
+        return True
+
+    def _routine_say(self, text: str) -> None:
+        self.plugin_say(
+            "[REMINDER — the user asked earlier to be reminded of this now]\n"
+            f"{text}\n"
+            "Remind them now, briefly, in the language they speak with you. Do not call any tools."
+        )
+
+    def _routine_builtin(self, name: str, options: dict) -> None:
+        loop = getattr(self, "_loop", None)
+        if not loop or not self.session:
+            raise RuntimeError("the assistant is not connected")
+        if name == "briefing":
+            coro = self._send_startup_briefing(options)
+        elif name == "checkin":
+            coro = self._routine_checkin(options)
+        elif name == "news_watch":
+            coro = self._routine_news_watch()
+        else:
+            raise ValueError(f"unknown built-in routine '{name}'")
+        asyncio.run_coroutine_threadsafe(coro, loop)
+
+    async def _routine_checkin(self, options: dict) -> None:
+        """The proactive check-in, when the routine says the moment has come."""
+        if not self.session:
+            return
+        self._proactive.mark_triggered()
+        try:
+            memory       = await asyncio.to_thread(load_memory)
+            monitors     = await asyncio.to_thread(list_monitors)
+            recent_turns = self._session_log[-8:] if self._session_log else []
+            prompt = self._proactive.build_prompt(
+                memory       = memory,
+                monitors     = monitors or None,
+                recent_turns = recent_turns or None,
+                focuses      = [str(f) for f in (options.get("focuses") or []) if str(f).strip()] or None,
+            )
+            await self.session.send_client_content(
+                turns={"role": "user", "parts": [{"text": prompt}]},
+                turn_complete=True,
+            )
+            print("[JARVIS] Proactive check-in.")
+        except Exception as e:
+            print(f"[Proactive] ⚠️ {e}")
+
+    async def _routine_news_watch(self) -> None:
+        """New headlines on the watched topics, said aloud — one routine run."""
+        try:
+            alerts = await asyncio.to_thread(monitor_check_all)
+            if not alerts:
+                return
+            memory = load_memory()
+            lang_e = memory.get("identity", {}).get("language", {})
+            lang   = (lang_e.get("value", "") if isinstance(lang_e, dict) else str(lang_e)).strip() or "English"
+            for alert in alerts:
+                if not self.session:
+                    return
+                msg = (
+                    f"{alert}\n\n"
+                    f"Inform the user about this development naturally in {lang}. "
+                    "One brief sentence only."
+                )
+                await self.session.send_client_content(
+                    turns={"role": "user", "parts": [{"text": msg}]},
+                    turn_complete=True,
+                )
+                print("[JARVIS] Monitor alert sent.")
+                await asyncio.sleep(6)   # gap between consecutive alerts
+        except Exception as e:
+            print(f"[Monitor] ⚠️ Background check error: {e}")
 
     def plugin_say(self, instruction: str) -> None:
         """
@@ -1418,19 +1674,34 @@ class JarvisLive:
             elif name == "shutdown_jarvis":
                 self.ui.write_log("SYS: Shutdown requested.")
                 async def _do_shutdown():
-                    await self._save_session_summary()
-                    if self.session:
+                    # The goodbye is said while the summary is written, and the
+                    # process ends once the goodbye has been HEARD — a fixed 1.5 s
+                    # from sending used to cut it off mid-word.
+                    async def _goodbye():
+                        if not self.session:
+                            return
                         try:
+                            if self._turn_done_event:
+                                self._turn_done_event.clear()
                             await self.session.send_client_content(
                                 turns={"role": "user", "parts": [{"text": "Say a brief natural goodbye to the user."}]},
                                 turn_complete=True,
                             )
+                            if self._turn_done_event:
+                                await asyncio.wait_for(self._turn_done_event.wait(), timeout=8.0)
+                            deadline = time.monotonic() + 6.0
+                            while time.monotonic() < deadline:
+                                with self._speaking_lock:
+                                    if not self._is_speaking:
+                                        break
+                                await asyncio.sleep(0.2)
+                            await asyncio.sleep(0.4)
                         except Exception:
-                            pass
-                    await asyncio.sleep(1.5)
-                    import os as _os
-                    _os._exit(0)
-                asyncio.create_task(_do_shutdown())
+                            await asyncio.sleep(1.5)
+                    await asyncio.gather(_goodbye(), self._wrap_up())
+                    self._stop_engines()
+                    _exit_process(0)
+                self._keep_task(asyncio.create_task(_do_shutdown()))
 
             elif self._action_registry.has(name):
                 # file_processor: fall back to the currently-uploaded file when none is given
@@ -1801,7 +2072,7 @@ class JarvisLive:
                                 async def _cam_close():
                                     await asyncio.sleep(2.0)
                                     self.ui.stop_camera_stream()
-                                asyncio.create_task(_cam_close())
+                                self._keep_task(asyncio.create_task(_cam_close()))
 
                     if response.tool_call:
                         fn_responses = []
@@ -1955,7 +2226,7 @@ class JarvisLive:
 
     # ── Morning briefing ────────────────────────────────────────────────────────
 
-    async def _send_startup_briefing(self) -> None:
+    async def _send_startup_briefing(self, options: dict | None = None) -> None:
         """
         Two-phase briefing optimized for speed:
           Phase 1 — instant greeting (no tools) → speech starts in <1s
@@ -1975,9 +2246,18 @@ class JarvisLive:
         name = _val("name")
         time_str = datetime.now().strftime("%H:%M")
 
+        # What the briefing covers is the routine's to say (core/routines): the
+        # news and its topic, and anything the user added to it. No options is
+        # the briefing as it always was.
+        options   = options or {}
+        want_news = options.get("news", True) is not False
+        topic     = str(options.get("news_topic") or "").strip() or "top world news today"
+        extra     = str(options.get("extra") or "").strip()
+
         # Start fetching news immediately — runs in parallel while phase 1 plays
         loop = asyncio.get_event_loop()
-        news_future = loop.run_in_executor(None, _fetch_news_sync, "top world news today")
+        news_future = (loop.run_in_executor(None, _fetch_news_sync, topic)
+                       if want_news else None)
 
         await asyncio.sleep(0.3)
         if not self.session:
@@ -2006,7 +2286,8 @@ class JarvisLive:
             )
 
         p1 = (
-            f"Greet the user warmly, mention it is {time_str}, and say you are fetching today's news now.{session_clause} "
+            f"Greet the user warmly, mention it is {time_str}"
+            f"{', and say you are fetching the news now' if want_news else ''}.{session_clause} "
             f"Keep it to 2 short sentences max. Do not call any tools.{lang_clause}{name_clause}"
         )
 
@@ -2019,6 +2300,8 @@ class JarvisLive:
             turn_complete=True,
         )
         print("[JARVIS] Briefing phase 1 (greeting) sent.")
+        if not want_news and not extra:
+            return
 
         # ── Phase 2: fire as soon as Phase 1 audio is done ───────────────────
         async def _deliver_news():
@@ -2029,7 +2312,7 @@ class JarvisLive:
 
                 # Wait for news fetch (already running) and Phase 1 turn-complete
                 # in parallel — whichever takes longer determines the wait time
-                news_done   = asyncio.wrap_future(news_future)
+                news_done   = asyncio.wrap_future(news_future) if news_future else None
                 turn_waited = False
                 if self._turn_done_event:
                     try:
@@ -2047,26 +2330,38 @@ class JarvisLive:
                 else:
                     await asyncio.sleep(1.0)
 
-                try:
-                    news_text = await asyncio.wait_for(news_done, timeout=8.0)
-                except Exception as e:
-                    self.ui.write_log(f"SYS: News fetch timed out/failed: {e!r}")
-                    news_text = ""
+                news_text = ""
+                if news_done is not None:
+                    try:
+                        news_text = await asyncio.wait_for(news_done, timeout=8.0)
+                    except Exception as e:
+                        self.ui.write_log(f"SYS: News fetch timed out/failed: {e!r}")
+                        news_text = ""
 
                 if not self.session:
                     return
 
+                extra_clause = (f"\n\nThen also do this, which the user asked to be part of "
+                                f"their briefing: {extra} — you may use tools for it."
+                                if extra else "")
+                no_tools = "" if extra else " Do not call any tools."
+
                 failed = (not news_text) or news_text.startswith(
                     ("No news found", "Search failed", "Please provide")
                 )
-                if not failed:
+                if not want_news:
+                    p2 = (f"[BRIEFING] The user asked for this to be part of their briefing: "
+                          f"{extra} — do it now, using tools if it needs them.{lang_str}")
+                elif not failed:
                     # Show on UI content panel immediately
-                    self.ui.show_content("NEWS — top world news today", news_text)
+                    default_topic = topic == "top world news today"
+                    self.ui.show_content("NEWS — top world news today" if default_topic else "NEWS",
+                                         news_text)
 
                     p2 = (
-                        f"[BRIEFING] Here are today's top news headlines:\n{news_text}\n\n"
+                        f"[BRIEFING] Here are today's news headlines ({topic}):\n{news_text}\n\n"
                         "Pick ONE headline, summarise it in one sentence, then say the full list "
-                        f"is displayed on screen. Do not call any tools.{lang_str}"
+                        f"is displayed on screen.{no_tools}{extra_clause}{lang_str}"
                     )
                 else:
                     self.ui.write_log(
@@ -2074,7 +2369,7 @@ class JarvisLive:
                     )
                     p2 = (
                         "News headlines could not be fetched right now. "
-                        f"Let the user know briefly.{lang_str}"
+                        f"Let the user know briefly.{extra_clause}{lang_str}"
                     )
 
                 await self.session.send_client_content(
@@ -2087,7 +2382,7 @@ class JarvisLive:
                 print(f"[JARVIS] Briefing phase 2 failed: {e}")
                 self.ui.write_log("SYS: Could not fetch the news for the briefing.")
 
-        asyncio.create_task(_deliver_news())
+        self._keep_task(asyncio.create_task(_deliver_news()))
 
     # ── Session memory ──────────────────────────────────────────────────────────
 
@@ -2339,8 +2634,12 @@ class JarvisLive:
             # A local engine that will not start must never mean no assistant.
             # Falling back to Live is the whole reason the ladder exists, and
             # the reason is said out loud rather than left in a console.
-            self.ui.write_log(f"SYS: local engine unavailable ({e}) — "
-                              f"using Gemini Live.")
+            # Said once per reason, not on every reconnect attempt.
+            note = (f"SYS: local engine unavailable ({e}) — using Gemini Live."
+                    if _gemini_usable() else f"SYS: local engine unavailable ({e}).")
+            if note != getattr(self, "_engine_fail_said", ""):
+                self._engine_fail_said = note
+                self.ui.write_log(note)
             print(f"[JARVIS] Pipeline engine unavailable: {e}")
             return None
 
@@ -2423,9 +2722,9 @@ class JarvisLive:
             from dashboard.server import DashboardServer
             self._dashboard = DashboardServer()
             self._dashboard.set_connect_callback(self._on_phone_connected)
-            asyncio.create_task(self._dashboard.serve())
+            self._keep_task(asyncio.create_task(self._dashboard.serve()))
             # Runs for the whole lifetime, not just inside an active session
-            asyncio.create_task(self._process_dashboard_commands())
+            self._keep_task(asyncio.create_task(self._process_dashboard_commands()))
         except Exception as e:
             print(f"[Dashboard] Disabled: {e}")
             self._dashboard = None
@@ -2450,6 +2749,20 @@ class JarvisLive:
                 # install this returns None in a few microseconds and nothing
                 # below behaves any differently.
                 self._engine_caps = self._resolve_engine_caps()
+                if self._engine_caps is None and not _gemini_usable():
+                    # Nothing can hold the conversation: Gemini has no key (or the
+                    # user chose not to use it) and no local engine is set up.
+                    # Connecting anyway failed with a bare KeyError every few
+                    # seconds and told nobody anything.
+                    if not getattr(self, "_no_engine_said", False):
+                        self._no_engine_said = True
+                        self.ui.write_log(
+                            "SYS: No Gemini key and no local engine set up yet — open ⚙ → "
+                            "ENGINE & PROVIDERS and choose MY OWN SETUP, or add a Gemini key.")
+                    self.ui.set_state("SLEEPING")
+                    await asyncio.sleep(5)
+                    continue
+                self._no_engine_said = False
                 config = self._build_config()
 
                 # The conversation itself. `_open_session` gives back a Gemini
@@ -2499,8 +2812,28 @@ class JarvisLive:
 
                     # Wake word: if enabled, come up ASLEEP (mic gated, silent)
                     # until the user says "Hey Jarvis" or taps wake in the UI.
+                    #
+                    # Only on the FIRST connect of a run. A reconnect — a dropped
+                    # network, the server rotating the connection — used to put an
+                    # assistant the user was talking to back to sleep mid-sentence.
+                    #
+                    # And never asleep with nothing listening. When the detector
+                    # could not start (the package missing for the Python this
+                    # launch used, a model that will not load), the assistant used
+                    # to sleep for good and only a button could wake it — which
+                    # reads exactly as "the wake word stopped working after a
+                    # restart". It stays awake now and says why.
+                    first_connect = not getattr(self, "_connected_once", False)
+                    self._connected_once = True
+                    wake_ok = False
                     if self._wake_enabled:
-                        self._ensure_wake_detector()
+                        # Off the event loop: the first model load takes seconds.
+                        wake_ok = await asyncio.to_thread(self._ensure_wake_detector)
+                        if not wake_ok:
+                            self.ui.write_log(
+                                "SYS: Wake word could not start — listening normally instead. "
+                                "Turn WAKE WORD off and on in CONTROLS to set it up again.")
+                    if self._wake_enabled and wake_ok and (first_connect or not self._awake):
                         self._awake = False
                         self.ui.set_state("SLEEPING")
                         self.ui.write_log("SYS: JARVIS online — sleeping. Say 'Hey Jarvis' to wake me.")
@@ -2538,8 +2871,10 @@ class JarvisLive:
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
                     tg.create_task(self._run_system_monitor())
-                    tg.create_task(self._run_background_monitor())
-                    tg.create_task(self._run_proactive_mode())
+                    if self._routines is None:
+                        # Routines did not load: the fixed schedules they replaced.
+                        tg.create_task(self._run_background_monitor())
+                        tg.create_task(self._run_proactive_mode())
                     tg.create_task(self._run_sleep_watch())
                     if self._dashboard:
                         tg.create_task(self._relay_phone_audio())
@@ -2554,7 +2889,11 @@ class JarvisLive:
                     # Morning briefing — fires once per process launch (if enabled).
                     # Skipped in wake-word mode: it comes up asleep, and a briefing
                     # would mean talking while "asleep".
-                    if not self._briefing_sent and get_brief_enabled() and self._awake:
+                    # With routines it is the "Opening briefing" routine, which
+                    # keeps the same rules (first connect only, not asleep).
+                    if self._routines is not None:
+                        self._routines.session_started(self._awake)
+                    elif not self._briefing_sent and get_brief_enabled() and self._awake:
                         self._briefing_sent = True
                         tg.create_task(self._send_startup_briefing())
 
@@ -2656,7 +2995,7 @@ class JarvisLive:
                     while not self.ui._win._ready:
                         await asyncio.sleep(1)
                     print("[JARVIS] New API key saved — reconnecting...")
-                    _conn_backoff = 3
+                    self._conn_backoff = 3
                     continue
 
                 # Network / timeout errors — log clearly and back off
@@ -2677,7 +3016,7 @@ class JarvisLive:
                 self.session = None
                 # Only save if there was a real conversation (≥3 turns)
                 if len(self._session_log) >= 3:
-                    asyncio.create_task(self._save_session_summary())
+                    self._keep_task(asyncio.create_task(self._save_session_summary()))
 
             self.set_speaking(False)
             self.ui.set_state("SLEEPING")
@@ -2689,12 +3028,35 @@ class JarvisLive:
             print(f"[JARVIS] Reconnecting in {delay}s...")
             await asyncio.sleep(delay)
 
+def _exit_process(code: int = 0) -> None:
+    """End the process on purpose, after the atexit handlers.
+
+    A normal interpreter exit waits on every worker thread still inside a tool —
+    a plugin loop, a long download — so the window could close while the process
+    stayed behind. The atexit handlers still run first: plugins hand things back
+    there (cloud_agent returns Telegram to the server)."""
+    import atexit
+    import os as _os
+    try:
+        atexit._run_exitfuncs()
+    except Exception:
+        pass
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    _os._exit(code)
+
+
 def main():
     ui = JarvisUI("face.png")
+    holder: dict = {}
 
     def runner():
         ui.wait_for_api_key()
         jarvis = JarvisLive(ui)
+        holder["jarvis"] = jarvis
         try:
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:
@@ -2702,6 +3064,15 @@ def main():
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()
+
+    # The window is closed: write the session summary, stop the engines, go.
+    jarvis = holder.get("jarvis")
+    if jarvis is not None:
+        try:
+            jarvis.finish()
+        except Exception as e:
+            print(f"[JARVIS] finish: {e!r}")
+    _exit_process(0)
 
 if __name__ == "__main__":
     main()

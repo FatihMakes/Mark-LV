@@ -90,6 +90,12 @@ def _normalize_url(url: str) -> str:
     Full URLs pass through unchanged.
     """
     url = url.strip()
+    # Trailing sentence punctuation is never part of an address, and it arrives
+    # more often than anyone would guess: a name lifted out of a sentence brings
+    # the full stop with it, and youtube.com/@name./videos opens an error page
+    # that looks like a page. Stripping it costs nothing and is true of every
+    # site in every language.
+    url = url.rstrip(".,;:!?'\"")
     if not url:
         return "about:blank"
     if "://" in url:
@@ -429,6 +435,72 @@ _MAC_APP_NAMES: dict[str, str] = {
 _WIN_EXE_HINTS: dict[str, str] = {"chrome": "chrome", "edge": "msedge"}
 
 
+# Chromium builds the accessibility tree for a PAGE only when it believes
+# something is listening. Nothing an outside program can do convinces it — both
+# a UIA walk and a WM_GETOBJECT probe were tried against a running browser and
+# returned the same empty panes.
+#
+# But the browser we START is ours to configure, and one flag changes the whole
+# picture. Measured on Edge, same page, same profile:
+#
+#     plain                                21 elements, page text: 4
+#     --force-renderer-accessibility       25 elements, page text: 7,
+#                                          including a clickable link
+#
+# That is the difference between a page the assistant can read and click by
+# name, in the user's OWN signed-in browser, and one it has to guess at from a
+# screenshot or drive from a second window where nobody is logged in.
+#
+# It applies only when this launches the browser. A browser already running
+# ignores the flag and simply takes the URL, which is correct: we are not
+# restarting somebody's browser to gain a feature.
+_CHROMIUM_FAMILY = frozenset({"chrome", "edge", "opera", "operagx", "brave",
+                              "vivaldi"})
+
+
+def _launch_flags(name: str) -> list[str]:
+    return (["--force-renderer-accessibility"]
+            if name in _CHROMIUM_FAMILY else [])
+
+
+def _native_outcome(name: str, url: str) -> str:
+    """What a native launch actually established, as opposed to what it asked for.
+
+    THIS RETURNED A SENTENCE SAYING "Opened", AND IT WAS NOT TRUE ENOUGH
+        Handing a URL to a browser executable proves one thing: the executable
+        started. It proves nothing about the page. The address may 404, redirect
+        to a sign-in wall, or - the case that exposed this - be an address the
+        model invented because it did not know the real one.
+
+        Asked to open a user's own YouTube channel, the model guessed a path
+        that does not exist. The browser opened it, this function answered
+        "Opened in operagx: <that address>", and the assistant reported the
+        channel as open while the screen showed an error page. A bare success
+        sentence is exactly the invitation to invent the rest that the rest of
+        this project spent a release removing.
+
+    The browser itself CAN be confirmed, cheaply, from the process table, so
+    that part is reported as fact and the page is reported as unconfirmed. Two
+    different things, said separately, which is the whole point of the outcome
+    vocabulary.
+    """
+    running = bool(appidentity.running(name))
+    if not url:
+        if running:
+            return outcome.done("browser_control", browser=name, opened=True,
+                                verified=True)
+        return outcome.unverified(
+            "browser_control",
+            "the browser was launched but has not appeared in the process list "
+            "yet", browser=name)
+    return outcome.unverified(
+        "browser_control",
+        "the address was handed to the browser, which does not report back - "
+        "whether the page actually loaded, redirected or does not exist is NOT "
+        "known, so it must not be described as open",
+        browser=name, url=url, browser_running=running)
+
+
 def _open_native(url: str, browser_name: Optional[str]) -> str:
     """
     Opens the user's REAL browser normally — with their own profile,
@@ -457,7 +529,7 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
                 cmd = ["open", "-a", app] + ([url] if url else [])
                 try:
                     subprocess.run(cmd, check=True, timeout=10)
-                    return f"Opened in {name}: {url}" if url else f"Opened {name}."
+                    return _native_outcome(name, url)
                 except Exception as e:
                     print(f"[Browser] 'open -a {app}' failed ({e}), trying binary…")
 
@@ -471,10 +543,10 @@ def _open_native(url: str, browser_name: Optional[str]) -> str:
         if exe:
             try:
                 subprocess.Popen(
-                    [exe, url] if url else [exe],
+                    [exe] + _launch_flags(name) + ([url] if url else []),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                return f"Opened in {name}: {url}" if url else f"Opened {name}."
+                return _native_outcome(name, url)
             except Exception as e:
                 print(f"[Browser] Native launch failed for {name}: {e}")
         print(f"[Browser] '{name}' not found — falling back to default browser.")
@@ -1067,6 +1139,42 @@ class _SessionRegistry:
 
 _registry = _SessionRegistry()
 
+# Every action this tool answers to. One list, used by the failure message and
+# by nothing else — it exists so that being told "that is not an action" also
+# tells you what the actions ARE.
+_ACTIONS = (
+    "go_to", "search", "new_tab", "close_tab",
+    "click", "smart_click", "type", "smart_type", "fill_form", "press",
+    "scroll", "get_text", "get_url", "screenshot",
+    "back", "forward", "reload",
+    "switch", "list_browsers", "close", "close_all",
+)
+
+
+def _unknown_action(action: str) -> str:
+    """Refuse an action this tool does not have, and say what it does have.
+
+    THE OLD ANSWER WAS A SENTENCE, AND A SENTENCE IS NOT A FAILURE
+        `f"Unknown browser action: '{action}'"` is a plain string. Nothing above
+        this file could tell it apart from a success: it does not start with a
+        status, so `outcome.is_problem` reads it as fine, the screen agent's
+        loop counted the step as performed, and the assistant said the browser
+        control function "couldn't understand the action" only because the model
+        happened to read the English.
+
+        Worse, it taught nothing. A caller told "unknown action 'open'" and
+        nothing else has exactly one move available, which is to guess again.
+        Observed doing precisely that: open, then "", then open.
+
+    So this is a real failure with the valid list attached. A planner that
+    reads it can correct itself on the next attempt instead of re-rolling.
+    """
+    return outcome.failed(
+        "browser_control",
+        f"there is no browser action called {action or '(empty)'!r}",
+        valid_actions=", ".join(_ACTIONS))
+
+
 def browser_control(
     parameters:    dict = None,
     response=None,
@@ -1076,7 +1184,7 @@ def browser_control(
     params  = parameters or {}
     action  = params.get("action", "").lower().strip()
     browser = params.get("browser", "").lower().strip() or None
-    result  = "Unknown action."
+    result  = _unknown_action(action)
 
     if action == "switch":
         target = browser or params.get("target", "").lower().strip()
@@ -1132,7 +1240,11 @@ def browser_control(
             nav_url = params.get("url", "").strip()
 
         result = _open_native(nav_url, browser)
-        if result.startswith("Opened") and nav_url:
+        # Remembered unless it outright FAILED. `unverified` is now the normal
+        # answer for a native open - the browser does not report back - and
+        # treating that as a problem would stop the automation session ever
+        # resuming the page the user is actually looking at.
+        if nav_url and not result.startswith(f"status={outcome.FAILED} "):
             _registry.note_native_url(_normalize_url(nav_url))
         _log(player, result)
         return result
@@ -1186,7 +1298,7 @@ def browser_control(
         elif action == "reload":
             result = sess.run(sess.reload())
         else:
-            result = f"Unknown browser action: '{action}'"
+            result = _unknown_action(action)
 
     except concurrent.futures.TimeoutError:
         result = f"Browser action '{action}' timed out (60s)."
@@ -1198,29 +1310,52 @@ def browser_control(
 
 
 def _log(player, text: str):
-    short = str(text)[:80]
-    print(f"[Browser] {short}")
-    if player:
-        print(f"[Browser] {short[:80]}")          # terminal, not the HUD
+    # ONE line, once. This printed the same string twice whenever a player was
+    # attached - which is always, in the real app - and the second copy read in
+    # the terminal like a second navigation. "Opened in operagx: <url>" twice in
+    # a row looks exactly like the browser being opened twice, and time was
+    # spent looking for a double-open that had never happened.
+    print(f"[Browser] {str(text)[:80]}")
 
 
 # ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "browser_control",
     "description": (
-        "Controls the web browser: open an address, search, click, type, "
-        "scroll, read the page, manage tabs, go back and forward. "
+        "Controls the web browser and everything INSIDE a web page: open an "
+        "address, search, click, type, scroll, read the page, manage tabs, go "
+        "back and forward. Anything happening on a website is this tool - it "
+        "reads the page itself, which nothing else in the assistant can do. "
         "THIS TOOL OPENS THE BROWSER ITSELF. Never call open_app for the "
         "browser first - doing both launches it twice, the second copy on a "
         "different profile with none of the user's sign-ins. 'Open Chrome and "
         "go to YouTube' is ONE call to this tool. "
+        "NEVER INVENT AN ADDRESS. Only pass a url you actually know. Anything "
+        "belonging to the user personally - their own channel, profile, "
+        "account page, inbox or playlist - has an address you do NOT know, and "
+        "guessing a path produces an error page that looks like a working one. "
+        "When the exact address is not known: open the site's own address "
+        "(youtube.com, instagram.com) and get to the rest with smart_click on "
+        "what the page shows, or use action='search', or ask the user. A "
+        "guessed path is never acceptable. "
+        "TO CLICK OR TYPE ON A PAGE, PREFER action='smart_click' or "
+        "action='smart_type' with a 'description' of what the thing SAYS on "
+        "screen - the visible label, in the page's own language. They search "
+        "the page by role, label, placeholder and text and find it. Plain "
+        "'click' with a 'selector' needs a CSS selector that is exactly right "
+        "for that site's markup, which is not something to guess at; use it "
+        "only when the selector is known. "
+        "For a job on a page that takes several steps - open a site, then find "
+        "and click something on it - call 'screen_agent' instead: it plans the "
+        "steps, calls this tool for each of them, and checks after every one "
+        "that it actually worked. "
         "Read the status it returns. 'done' means it was confirmed - for an "
         "open, the url reported back is the page's OWN address, so if it "
         "differs from what was asked for the site redirected and the user "
-        "should be told. 'unverified' means the address was handed to the "
-        "system's default browser, which never reports back: say it was opened "
-        "but not confirmed, never that the page is up. 'failed' means nothing "
-        "happened."
+        "should be told. 'unverified' means the address was handed to a browser "
+        "that does not report back: whether the page loaded, redirected or does "
+        "not exist is unknown, so say it was opened but NOT confirmed and never "
+        "that the page is up. 'failed' means nothing happened."
     ),
     "brief": (
         "Controls the web browser: open a URL, navigate, click, read the page."

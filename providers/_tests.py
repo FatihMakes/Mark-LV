@@ -1035,7 +1035,9 @@ def test_panel_settings_survive():
         real = pathlib.Path.write_text
 
         def counted(self, *a, **k):
-            if self.name == "api_keys.json":
+            # The config is written to api_keys.json.tmp and moved into place
+            # in one step (memory/config_manager.py), so either name is a write.
+            if self.name in ("api_keys.json", "api_keys.json.tmp"):
                 writes[0] += 1
             return real(self, *a, **k)
 

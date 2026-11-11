@@ -8,10 +8,13 @@ passed a syntax check and did nothing when used.
 ## How the app runs
 
 - `main.py` holds the voice session on an asyncio event loop in a background
-  thread. `ui.py` holds the window on the **Qt main thread**.
+  thread. The window — the `gui/` package, built by `ui.py` — lives on the
+  **Qt main thread**.
 - Tools — `actions/*.py` and `plugins/*.py` — run on **worker threads**, never
   on the Qt main thread.
 - There is exactly **one** `QApplication`, created by `ui.py`.
+- Long work the user asks for in the background — research, drafting — is the
+  task engine's job (`core/tasks/`, agents in `agents/*.md`), not a plugin's.
 
 ## Threading: the rule that breaks most generated code
 
@@ -81,14 +84,20 @@ data = gemini.as_json(prompt, tier=gemini.SMART)    # structured, may return Non
 Every call can fail or return `None`. Code must handle that — for example with
 a small built-in fallback — instead of crashing.
 
-## Changing the window (`ui.py`)
+## Changing the window (`gui/`)
 
+- The window is the `gui/` package: `window.py` (MainWindow — columns, drawers,
+  content panel), `widgets.py`, `overlays.py`, `providers_panel.py`, `hud.py`.
+  `ui.py` keeps only `JarvisUI` and re-exports every older name.
 - Widgets are created and changed only on the Qt thread.
-- To let other threads trigger a change: add a `pyqtSignal` to `MainWindow`,
-  connect it to a slot in `__init__`, and add a thin public method on
-  `JarvisUI` that only emits the signal. `show_content` / `_content_sig` /
-  `_show_content` is the pattern to copy.
-- Colours come from the `C` palette class; fonts are `QFont("Courier New", size)`.
+- To let other threads trigger a change: add a `pyqtSignal` to `MainWindow` in
+  `gui/window.py`, connect it to a slot in its `__init__`, and add a thin public
+  method on `JarvisUI` in `ui.py` that only emits the signal. `show_content` /
+  `_content_sig` / `_show_content` is the pattern to copy.
+- Colours come from the `C` palette in `gui/theme.py`; stylesheets use only its
+  hex values, so the live re-theme can repaint them. Fonts come from
+  `gui/style.py` — `hud_font(size)`, `mono_font(size)`, `px_font(px)` — never a
+  hard-coded family.
 
 ## General
 

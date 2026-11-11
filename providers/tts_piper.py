@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import threading
 import time
 from importlib.util import find_spec
@@ -188,8 +190,31 @@ def language_of(voice: str) -> str:
     return voice.split("_")[0].lower() if voice else ""
 
 
+def _use_certifi() -> bool:
+    """Point urllib at certifi's certificates. False when there is nothing new to try.
+
+    Piper's downloader uses urllib, and python.org's macOS Python has NO
+    certificate store until its "Install Certificates.command" has been run — so
+    every HTTPS download fails with CERTIFICATE_VERIFY_FAILED, while the voice
+    list (fetched with httpx, which brings certifi) loads fine. Only applied
+    after that failure, so a machine whose own store works is left alone."""
+    try:
+        import certifi
+    except Exception:
+        return False
+    bundle = certifi.where()
+    if os.environ.get("SSL_CERT_FILE") == bundle:
+        return False
+    os.environ["SSL_CERT_FILE"] = bundle
+    return True
+
+
 def download(voice: str, log=None) -> Path:
-    """Fetch one voice. Blocking — callers run it off the interface thread."""
+    """Fetch one voice. Blocking — callers run it off the interface thread.
+
+    Into a scratch folder first, moved into place only once both files are
+    complete. Piper writes straight to the final name, so a download cut short
+    left a truncated .onnx that every later check took for an installed voice."""
     from piper.download_voices import download_voice
 
     _VOICE_DIR.mkdir(parents=True, exist_ok=True)
@@ -199,7 +224,27 @@ def download(voice: str, log=None) -> Path:
     if log:
         log(f"SYS: downloading the {voice} voice (about 60 MB, once)")
     t0 = time.monotonic()
-    download_voice(voice, _VOICE_DIR)
+    partial = _VOICE_DIR / ".partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True, exist_ok=True)
+    try:
+        try:
+            download_voice(voice, partial)
+        except Exception as e:
+            if "CERTIFICATE_VERIFY_FAILED" not in str(e):
+                raise
+            if not _use_certifi():
+                raise RuntimeError(
+                    "this Python cannot check HTTPS certificates. On macOS run "
+                    "'Install Certificates.command' from the Python folder in "
+                    "Applications, or: pip install certifi") from e
+            if log:
+                log("SYS: this Python has no certificate store — using certifi's and retrying")
+            download_voice(voice, partial)
+        for part in partial.iterdir():
+            os.replace(part, _VOICE_DIR / part.name)
+    finally:
+        shutil.rmtree(partial, ignore_errors=True)
     if log:
         log(f"SYS: {voice} downloaded in {time.monotonic() - t0:.1f}s")
     return target

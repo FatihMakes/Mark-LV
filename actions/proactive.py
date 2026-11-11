@@ -52,6 +52,7 @@ class ProactiveEngine:
         memory:       dict,
         monitors:     list[str] | None = None,
         recent_turns: list[str] | None = None,
+        focuses:      list[str] | None = None,
     ) -> str:
         """
         Build a context snapshot for Gemini.
@@ -72,8 +73,11 @@ class ProactiveEngine:
         mem_str = format_memory_for_prompt(memory) or "(no stored user data)"
 
         # Rotating context focus (cycles every trigger)
+        # (or through the routine's own list, when the check-in routine has one)
         focus_index = self._rotation % 3
-        if focus_index == 0:
+        if focuses:
+            focus = str(focuses[self._rotation % len(focuses)])
+        elif focus_index == 0:
             focus = (
                 "Focus on the user's active projects or goals if any are stored. "
                 "Ask how something is going, or offer a relevant tip."

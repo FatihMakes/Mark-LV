@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from importlib.util import find_spec
 from typing import AsyncIterator
 
@@ -57,6 +58,31 @@ DEFAULT_MODEL = MODELS[0]
 _PCM = "pcm_24000"
 _MP3 = "mp3_44100_128"
 
+# The shape of a voice ID: one run of letters and digits. A voice NAME almost
+# never looks like that — it has spaces, punctuation, or is far shorter.
+_VOICE_ID = re.compile(r"[A-Za-z0-9]{16,40}")
+
+
+def _match_voice(wanted: str, voices: list[tuple[str, str]]) -> str:
+    """The ID for `wanted`, which may already be an ID or may be a voice's name.
+
+    Earlier panels saved the name of a listed voice instead of its ID, and the
+    API answered every sentence with "invalid ID". Matching the name against the
+    account's own voices repairs such a setting without the user doing anything.
+    Empty string when nothing on the account matches.
+    """
+    wanted = (wanted or "").strip()
+    if not wanted:
+        return ""
+    for voice_id, name in voices:
+        if voice_id == wanted:
+            return voice_id
+    folded = wanted.casefold()
+    for voice_id, name in voices:
+        if str(name).strip().casefold() == folded:
+            return voice_id
+    return ""
+
 
 class ElevenLabsTTS:
     def __init__(self, cfg: dict):
@@ -70,6 +96,27 @@ class ElevenLabsTTS:
         self.base = API
         # None until the first request has learned what this account may have.
         self._format: str | None = None
+        # The voice value last looked up by name, so a lookup happens once.
+        self._resolved_from = ""
+
+    def _resolve_voice(self) -> None:
+        """Turn a saved voice NAME into its ID, once. Never raises.
+
+        Only values that do not look like an ID are looked up, so a correctly
+        configured voice costs nothing extra.
+        """
+        wanted = self.voice_id
+        if (not wanted or not self.key or _VOICE_ID.fullmatch(wanted)
+                or wanted == self._resolved_from):
+            return
+        self._resolved_from = wanted
+        try:
+            found = _match_voice(wanted, self.voices())
+        except Exception:
+            return
+        if found:
+            self.voice_id = found
+            self._resolved_from = found
 
     # ── requests ─────────────────────────────────────────────────────────────
     def _headers(self) -> dict:
@@ -105,6 +152,7 @@ class ElevenLabsTTS:
             raise RuntimeError("no ElevenLabs API key is set")
         if not self.voice_id:
             raise RuntimeError("no ElevenLabs voice is chosen")
+        await asyncio.to_thread(self._resolve_voice)
         text = (text or "").strip()
         if not text:
             return
@@ -172,6 +220,13 @@ class ElevenLabsTTS:
         if not self.voice_id:
             names = ", ".join(n for _, n in vs[:4])
             return False, f"Key works. Choose a voice — {len(vs)} available: {names}"
+        found = _match_voice(self.voice_id, vs)
+        if not found and not _VOICE_ID.fullmatch(self.voice_id):
+            return False, (f"No voice called {self.voice_id!r} on this account. "
+                           f"Pick one from the list.")
+        # An ID that is not on the account's own list is left alone, as before:
+        # a voice can be usable without being listed there.
+        self.voice_id = found or self.voice_id
         name = next((n for i, n in vs if i == self.voice_id), self.voice_id)
         note = "" if find_spec("av") else \
             "  (MP3 fallback would need PyAV — only matters on a free tier)"
