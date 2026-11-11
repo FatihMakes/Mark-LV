@@ -1,0 +1,10 @@
+# Unreal Engine build/cache artifacts - never commit these.
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+.vs/
+*.sln
+*.VC.db
+*.VC.VC.opendb
+.vsconfig

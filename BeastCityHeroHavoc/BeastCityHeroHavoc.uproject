@@ -1,0 +1,36 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "BeastCity: Hero Havoc - superhero open-world city demolition sandbox (Raccoon/Chicken/Cat only).",
+	"Modules": [
+		{
+			"Name": "BeastCityHeroHavoc",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		},
+		{
+			"Name": "HeroCore",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "HeroAbilities",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "CitySim",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "Destruction",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
