@@ -333,7 +333,7 @@ def _save_flag(key: str, value) -> None:
 
 
 def get_brief_enabled() -> bool:
-    return load_api_keys().get("morning_brief_enabled", True)
+    return bool(load_api_keys().get("morning_brief_enabled", False))
 
 
 @_locked
