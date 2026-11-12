@@ -48,3 +48,11 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── Visual Studio / IDE Caches ────────────────────────────────────────────────
+.vs/
+*.suo
+*.user
+*.slnx.sqlite
+bin/
+obj/
