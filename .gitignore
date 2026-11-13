@@ -51,9 +51,3 @@ screenshots/
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 tests/
-
-# ── Plugins (ignore all plugin files except _template.py and __init__.py) ───
-plugins/*
-!plugins/_template.py
-!plugins/__init__.py
-!plugins/__init_.py
