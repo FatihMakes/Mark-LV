@@ -36,6 +36,10 @@ automatically. The ones plugins usually need:
 | A quiz the user answers on screen | `player.show_quiz(topic, questions, grade=None)` |
 | A structured review | `player.show_review(title, summary, findings)` |
 | Play a video in the HUD | `player.show_video(path_or_url, title)` |
+| Display an interface in the main HUD | `player.show_hud_view(plugin_id, title, content, content_type="url", replace=True)` |
+| Update an active HUD interface | `player.update_hud_view(plugin_id, content, content_type=None)` |
+| Close an active HUD interface | `player.close_hud_view(plugin_id)` |
+| Query active HUD interface state | `player.get_hud_view_state() -> dict` |
 
 `show_quiz` takes `questions` as a list of dicts:
 `{"question": str, "options": [str, ...] (empty list for a typed answer),
@@ -47,6 +51,35 @@ the result comes back to the conversation by itself — `run()` returns at once.
 Do **not** start a separate GUI program (`subprocess` running a PyQt script)
 to work around this rule. It hides every error from the user, and the app
 already has a screen for it.
+
+## Universal Plugin HUD Display System
+
+Plugins can render interactive interfaces directly inside the central MAIN HUD display (stack index 3, sharing the stage with the avatar, live camera, and video player) using:
+
+```python
+player.show_hud_view(
+    plugin_id="my_plugin",
+    title="MY PLUGIN DISPLAY",
+    content="http://127.0.0.1:8765/",   # or HTML string, formatted text, or spec dict
+    content_type="url",                 # "url" | "html" | "text" | "spec"
+    replace=True
+)
+```
+
+- **Content types**:
+  - `"url"`: Embedded QtWebEngine browser rendering a local web application.
+  - `"html"`: Direct HTML document with inline or CDN-loaded scripts and styles.
+  - `"text"`: Formatted monospace or styled rich text.
+  - `"spec"`: Declarative dictionary defining containers, metrics, key-value rows, tables, progress bars, and status cards.
+- **Ownership & Lifecycle**:
+  - Each view is owned by `plugin_id`.
+  - Only the owning plugin may call `player.update_hud_view(plugin_id, ...)` or `player.close_hud_view(plugin_id)`.
+  - A second plugin cannot overwrite an active display unless `replace=True` is explicitly passed.
+  - Closing a view restores the avatar (stack index 0).
+- **Interlocks & Priority**:
+  - Live camera streams have temporary top priority; starting a camera stream preserves the plugin HUD and stopping the camera seamlessly restores it without reloading.
+  - Opening a plugin view while a video or image is active cleanly closes the video and restores microphone listening.
+- **Thread Safety**: Like all `player` methods, HUD display methods emit Qt signals to the GUI thread and are 100% safe to invoke from background worker threads.
 
 ## Plugins
 
