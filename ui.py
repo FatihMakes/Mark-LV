@@ -372,6 +372,118 @@ class JarvisUI:
         """Thread-safe: stop the live camera feed."""
         self._win.stop_camera_stream()
 
+    # ── Universal Plugin HUD Display System ──────────────────────────────────
+    def show_hud_view(
+        self,
+        plugin_id: str,
+        title: str,
+        content: Any,
+        content_type: str = "url",
+        replace: bool = True,
+    ) -> bool:
+        """
+        Thread-safe: display a plugin's interface in the central main HUD display.
+
+        Parameters:
+            plugin_id: Unique identifier for the plugin owning the view.
+            title: Title to display in the HUD header bar.
+            content: URL string, HTML string, plain text, or declarative JSON/dict spec.
+            content_type: 'url' (embedded webview), 'html', 'text', or 'spec' (declarative native UI).
+            replace: If True, allows replacing an active view owned by another plugin.
+        """
+        if not getattr(self, "_win", None):
+            return False
+        try:
+            self._win._plugin_hud_open_sig.emit(
+                str(plugin_id or "").strip(),
+                str(title or "").strip(),
+                content,
+                str(content_type or "url").lower().strip(),
+                bool(replace),
+            )
+            return True
+        except Exception as exc:
+            self.write_log(f"SYS: show_hud_view failed ({exc})")
+            return False
+
+    def update_hud_view(
+        self,
+        plugin_id: str,
+        content: Any,
+        content_type: str | None = None,
+    ) -> bool:
+        """
+        Thread-safe: update an existing plugin interface in the central main HUD.
+
+        Parameters:
+            plugin_id: Must match the current owner of the view.
+            content: New content or update payload (URL, HTML, text, spec, or 'javascript:...').
+            content_type: Optional new content type.
+        """
+        if not getattr(self, "_win", None):
+            return False
+        try:
+            self._win._plugin_hud_update_sig.emit(
+                str(plugin_id or "").strip(),
+                content,
+                str(content_type).lower().strip() if content_type else None,
+            )
+            return True
+        except Exception as exc:
+            self.write_log(f"SYS: update_hud_view failed ({exc})")
+            return False
+
+    def close_hud_view(self, plugin_id: str) -> bool:
+        """
+        Thread-safe: close the plugin interface and return the central HUD to the avatar.
+
+        Parameters:
+            plugin_id: Must match the current owner (or '*' for host override).
+        """
+        if not getattr(self, "_win", None):
+            return False
+        try:
+            self._win._plugin_hud_close_sig.emit(str(plugin_id or "").strip())
+            return True
+        except Exception as exc:
+            self.write_log(f"SYS: close_hud_view failed ({exc})")
+            return False
+
+    def get_hud_view_state(self) -> dict:
+        """
+        Thread-safe: return cached snapshot of current HUD display state without touching Qt widgets.
+        """
+        if not getattr(self, "_win", None):
+            return {
+                "active": False,
+                "plugin_id": None,
+                "title": "",
+                "content_type": None,
+                "url": None,
+                "is_visible": False,
+                "is_loading": False,
+                "has_error": False,
+                "error_message": "",
+                "owner": None,
+                "has_webengine": False,
+            }
+        try:
+            return dict(self._win.get_plugin_hud_state())
+        except Exception:
+            return {
+                "active": False,
+                "plugin_id": None,
+                "title": "",
+                "content_type": None,
+                "url": None,
+                "is_visible": False,
+                "is_loading": False,
+                "has_error": False,
+                "error_message": "",
+                "owner": None,
+                "has_webengine": False,
+            }
+
     @property
     def assistant_name(self) -> str:
         return self._win._assistant_name

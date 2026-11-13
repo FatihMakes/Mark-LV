@@ -48,3 +48,6 @@ desktop.ini
 logs/
 downloads/
 screenshots/
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+tests/

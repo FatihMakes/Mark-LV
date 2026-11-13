@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>JARVIS MARK LVII | Map Explorer & 3D Earth Intelligence</title>
+    
+    <!-- Pinned MapLibre GL CSS -->
+    <link rel="stylesheet" href="vendor/maplibre-gl.css" onerror="this.onerror=null;this.href='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';">
+    <link rel="stylesheet" href="styles.css">
+    
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23020b14' stroke='%2300e5ff' stroke-width='4'/><path d='M50 15 L50 85 M15 50 L85 50' stroke='%2300e5ff' stroke-width='2' stroke-dasharray='4'/><circle cx='50' cy='50' r='25' fill='none' stroke='%23ffab00' stroke-width='2'/><circle cx='50' cy='50' r='4' fill='%2300e5ff'/></svg>">
+</head>
+<body class="theme-dark">
+    <!-- Top System Header -->
+    <header id="top-bar">
+        <div class="brand">
+            <div class="logo-orb"></div>
+            <div class="brand-text">
+                <span class="brand-title">JARVIS <span class="accent">MAP EXPLORER</span></span>
+                <span class="brand-sub">MARK LVII // EARTH INTELLIGENCE SYSTEM</span>
+            </div>
+        </div>
+
+        <div class="search-container">
+            <div class="search-input-wrapper">
+                <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                <input type="text" id="global-search" placeholder="Search cities, coordinates, landmarks, or flights..." autocomplete="off">
+                <button id="search-clear-btn" class="icon-btn hidden" title="Clear search">×</button>
+            </div>
+            <div id="search-results-dropdown" class="dropdown-panel hidden"></div>
+        </div>
+
+        <div class="top-controls">
+            <!-- 2D / 3D Globe Projection Switcher -->
+            <div class="view-switch-group">
+                <button id="btn-view-2d" class="toggle-btn active" title="Switch to 2D Map Projection">
+                    <span class="btn-icon">🗺️</span> 2D MAP
+                </button>
+                <button id="btn-view-globe" class="toggle-btn" title="Switch to 3D Earth Globe">
+                    <span class="btn-icon">🌐</span> 3D GLOBE
+                </button>
+            </div>
+
+            <!-- Map Layer / Style Quick Selector -->
+            <div class="select-wrapper">
+                <select id="layer-quick-select" title="Change Base Map Style">
+                    <option value="streets">Street Map</option>
+                    <option value="dark" selected>Dark HUD</option>
+                    <option value="light">Light Carto</option>
+                    <option value="satellite">Satellite</option>
+                    <option value="satellite_labels">Satellite + Labels</option>
+                    <option value="topo">Topographic</option>
+                </select>
+            </div>
+
+            <!-- Locate User Button -->
+            <button id="btn-locate-me" class="action-btn" title="Center on Current Location">
+                <span class="icon">📍</span> LOCATE
+            </button>
+
+            <!-- Fullscreen Toggle -->
+            <button id="btn-fullscreen" class="icon-btn-round" title="Toggle Fullscreen">
+                <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <div id="workspace">
+        <!-- Left Sidebar Navigation -->
+        <nav id="left-nav">
+            <button class="nav-tab active" data-tab="search" title="Search & Geocoding">
+                <span class="nav-icon">🔍</span>
+                <span class="nav-label">SEARCH</span>
+            </button>
+            <button class="nav-tab" data-tab="routes" title="Route Planning & Turn-by-Turn Navigation">
+                <span class="nav-icon">🧭</span>
+                <span class="nav-label">ROUTES</span>
+            </button>
+            <button class="nav-tab" data-tab="places" title="Points of Interest & Places Nearby">
+                <span class="nav-icon">📍</span>
+                <span class="nav-label">PLACES</span>
+            </button>
+            <button class="nav-tab" data-tab="destinations" title="Curated World Destinations">
+                <span class="nav-icon">🏛️</span>
+                <span class="nav-label">DISCOVER</span>
+            </button>
+            <button class="nav-tab" data-tab="flights" title="Live Flight Radar (OpenSky)">
+                <span class="nav-icon">✈️</span>
+                <span class="nav-label">FLIGHTS</span>
+            </button>
+            <button class="nav-tab" data-tab="iss" title="International Space Station Tracker">
+                <span class="nav-icon">🛰️</span>
+                <span class="nav-label">ISS ORBIT</span>
+            </button>
+            <button class="nav-tab" data-tab="layers" title="Map Layers & Overlays">
+                <span class="nav-icon">📑</span>
+                <span class="nav-label">LAYERS</span>
+            </button>
+            <button class="nav-tab" data-tab="saved" title="Saved Locations & Bookmarks">
+                <span class="nav-icon">⭐</span>
+                <span class="nav-label">SAVED</span>
+            </button>
+            <button class="nav-tab" data-tab="settings" title="System Settings & API Keys">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-label">SETTINGS</span>
+            </button>
+        </nav>
+
+        <!-- Collapsible Tab Content Drawer -->
+        <aside id="sidebar-drawer" class="drawer-open">
+            <div class="drawer-header">
+                <h3 id="drawer-title">SEARCH & EXPLORE</h3>
+                <button id="drawer-toggle-btn" class="icon-btn" title="Collapse Drawer">«</button>
+            </div>
+
+            <div class="drawer-body">
+                <!-- Search Tab View -->
+                <section id="tab-search" class="tab-pane active">
+                    <div class="section-block">
+                        <label class="section-label">COORDINATE PARSER</label>
+                        <p class="section-desc">Supports Decimal Degrees (e.g. <code>12.308, 75.106</code>) and DMS (e.g. <code>12° 18' 29" N, 75° 6' 22" E</code>).</p>
+                        <div class="input-row">
+                            <input type="text" id="coord-input" placeholder="Latitude, Longitude">
+                            <button id="coord-jump-btn" class="btn-primary">JUMP</button>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">QUICK REGIONS</label>
+                        <div class="chip-container">
+                            <button class="chip" data-lat="12.308" data-lon="75.106" data-zoom="13">Kanhangad</button>
+                            <button class="chip" data-lat="12.500" data-lon="75.000" data-zoom="13">Kasaragod</button>
+                            <button class="chip" data-lat="12.392" data-lon="75.033" data-zoom="14">Bekal Fort</button>
+                            <button class="chip" data-lat="8.524" data-lon="76.936" data-zoom="12">Trivandrum</button>
+                            <button class="chip" data-lat="9.931" data-lon="76.267" data-zoom="12">Kochi</button>
+                            <button class="chip" data-lat="28.613" data-lon="77.209" data-zoom="11">New Delhi</button>
+                            <button class="chip" data-lat="48.858" data-lon="2.294" data-zoom="13">Paris</button>
+                            <button class="chip" data-lat="35.676" data-lon="139.650" data-zoom="11">Tokyo</button>
+                            <button class="chip" data-lat="40.712" data-lon="-74.006" data-zoom="11">New York</button>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">RECENT SEARCHES</label>
+                        <ul id="recent-searches-list" class="item-list">
+                            <li class="empty-hint">No recent searches yet.</li>
+                        </ul>
+                    </div>
+                </section>
+
+                <!-- Routes Tab View -->
+                <section id="tab-routes" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">TRAVEL MODE</label>
+                        <div class="mode-buttons">
+                            <button class="mode-btn active" data-mode="driving" title="Driving">🚗 Driving</button>
+                            <button class="mode-btn" data-mode="walking" title="Walking">🚶 Walking</button>
+                            <button class="mode-btn" data-mode="cycling" title="Cycling">🚲 Cycling</button>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">WAYPOINTS</label>
+                        <div class="waypoint-row">
+                            <span class="waypoint-bullet start">A</span>
+                            <input type="text" id="route-origin" placeholder="Origin (City, address or click map)">
+                            <button class="icon-btn pick-coord-btn" data-target="route-origin" title="Pick on Map">🎯</button>
+                        </div>
+
+                        <div id="additional-waypoints"></div>
+
+                        <div class="waypoint-row">
+                            <span class="waypoint-bullet end">B</span>
+                            <input type="text" id="route-destination" placeholder="Destination">
+                            <button class="icon-btn pick-coord-btn" data-target="route-destination" title="Pick on Map">🎯</button>
+                        </div>
+
+                        <div class="btn-group-row">
+                            <button id="add-stop-btn" class="btn-secondary">+ Add Stop</button>
+                            <button id="swap-route-btn" class="btn-secondary">⇅ Swap</button>
+                        </div>
+
+                        <div class="btn-group-row" style="margin-top: 10px;">
+                            <button id="calc-route-btn" class="btn-primary">CALCULATE ROUTE</button>
+                            <button id="clear-route-btn" class="btn-danger">CLEAR</button>
+                        </div>
+                    </div>
+
+                    <div id="route-summary-card" class="summary-card hidden">
+                        <div class="summary-header">
+                            <h4 id="route-title">Route Guidance</h4>
+                            <span id="route-provider-badge" class="badge">OSRM</span>
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="metric">
+                                <span class="metric-val" id="route-distance">0.0 km</span>
+                                <span class="metric-label">DISTANCE</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-val" id="route-duration">0 min</span>
+                                <span class="metric-label">EST. TIME</span>
+                            </div>
+                        </div>
+
+                        <!-- Elevation Profile Preview -->
+                        <div id="elevation-profile-container" class="elevation-box">
+                            <div class="elev-header">Elevation Profile</div>
+                            <canvas id="elevation-canvas" width="300" height="70"></canvas>
+                        </div>
+
+                        <div class="turns-container">
+                            <div class="turns-header">Turn-by-Turn Guidance</div>
+                            <ol id="turn-instructions-list" class="turns-list"></ol>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Places Tab View -->
+                <section id="tab-places" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">SEARCH CATEGORY NEARBY</label>
+                        <div class="category-grid">
+                            <button class="cat-card" data-cat="tourist attraction">
+                                <span class="cat-icon">🏰</span>
+                                <span class="cat-title">Attractions</span>
+                            </button>
+                            <button class="cat-card" data-cat="hotel">
+                                <span class="cat-icon">🏨</span>
+                                <span class="cat-title">Hotels</span>
+                            </button>
+                            <button class="cat-card" data-cat="restaurant">
+                                <span class="cat-icon">🍽️</span>
+                                <span class="cat-title">Restaurants</span>
+                            </button>
+                            <button class="cat-card" data-cat="hospital">
+                                <span class="cat-icon">🏥</span>
+                                <span class="cat-title">Hospitals</span>
+                            </button>
+                            <button class="cat-card" data-cat="airport">
+                                <span class="cat-icon">🛫</span>
+                                <span class="cat-title">Airports</span>
+                            </button>
+                            <button class="cat-card" data-cat="railway">
+                                <span class="cat-icon">🚆</span>
+                                <span class="cat-title">Stations</span>
+                            </button>
+                            <button class="cat-card" data-cat="fuel">
+                                <span class="cat-icon">⛽</span>
+                                <span class="cat-title">Fuel Stations</span>
+                            </button>
+                            <button class="cat-card" data-cat="beach">
+                                <span class="cat-icon">🏖️</span>
+                                <span class="cat-title">Beaches</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">SEARCH RADIUS</label>
+                        <div class="range-row">
+                            <input type="range" id="places-radius-slider" min="5" max="100" value="25" step="5">
+                            <span id="places-radius-val">25 km</span>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label" id="places-count-label">NEARBY PLACES</label>
+                        <div id="places-list" class="cards-list">
+                            <div class="empty-hint">Select a category above to scan nearby locations.</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Discover Destinations Tab View -->
+                <section id="tab-destinations" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">FILTER BY DESTINATION TYPE</label>
+                        <div class="chip-container" id="dest-category-chips">
+                            <button class="chip active" data-dest-cat="">All</button>
+                            <button class="chip" data-dest-cat="Historical places">Historical</button>
+                            <button class="chip" data-dest-cat="Famous landmarks">Landmarks</button>
+                            <button class="chip" data-dest-cat="Beaches">Beaches</button>
+                            <button class="chip" data-dest-cat="Mountains">Mountains</button>
+                            <button class="chip" data-dest-cat="National parks">Parks</button>
+                            <button class="chip" data-dest-cat="Popular cities">Cities</button>
+                        </div>
+                    </div>
+
+                    <div id="destinations-list" class="cards-list"></div>
+                </section>
+
+                <!-- Flight Radar Tab View -->
+                <section id="tab-flights" class="tab-pane">
+                    <div class="section-block">
+                        <div class="switch-row">
+                            <label class="section-label" style="margin:0;">LIVE FLIGHT RADAR</label>
+                            <input type="checkbox" id="flight-radar-toggle" checked>
+                        </div>
+                        <p class="section-desc">Queries OpenSky Network for live ADS-B aircraft positions in view.</p>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">SEARCH AIRCRAFT</label>
+                        <div class="input-row">
+                            <input type="text" id="flight-search-input" placeholder="Callsign or ICAO24 (e.g. AXB2205)">
+                            <button id="flight-search-btn" class="btn-primary">FIND</button>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <span class="metric-val" id="radar-aircraft-count">0</span>
+                            <span class="metric-label">AIRCRAFT IN VIEW</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-val" id="radar-data-freshness">Live</span>
+                            <span class="metric-label">DATA SOURCE</span>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">TRACKED FLIGHTS IN VIEW</label>
+                        <div id="flights-list" class="cards-list">
+                            <div class="empty-hint">Scanning viewport for live flights...</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ISS Orbit Tab View -->
+                <section id="tab-iss" class="tab-pane">
+                    <div class="section-block">
+                        <div class="switch-row">
+                            <label class="section-label" style="margin:0;">ISS LIVE TRACKING</label>
+                            <input type="checkbox" id="iss-active-toggle" checked>
+                        </div>
+                        <div class="switch-row" style="margin-top: 8px;">
+                            <label class="sub-label">Follow Camera on ISS</label>
+                            <input type="checkbox" id="iss-follow-toggle">
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <span class="metric-val" id="iss-altitude-val">420 km</span>
+                            <span class="metric-label">ALTITUDE</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-val" id="iss-velocity-val">27,600 km/h</span>
+                            <span class="metric-label">VELOCITY</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-val" id="iss-visibility-val">Daylight</span>
+                            <span class="metric-label">VISIBILITY</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-val" id="iss-orbit-period">92.9 min</span>
+                            <span class="metric-label">ORBIT PERIOD</span>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <div class="btn-group-row">
+                            <button id="iss-focus-btn" class="btn-primary">FOCUS ON ISS</button>
+                            <button id="iss-orbit-toggle-btn" class="btn-secondary">TOGGLE ORBIT PATH</button>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">GROUND TRACK TELEMETRY</label>
+                        <div class="telemetry-box">
+                            <div class="telemetry-row">
+                                <span class="t-key">Latitude:</span>
+                                <span class="t-val" id="iss-lat-val">0.0000°</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Longitude:</span>
+                                <span class="t-val" id="iss-lon-val">0.0000°</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Footprint:</span>
+                                <span class="t-val" id="iss-footprint-val">4,500 km</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Source:</span>
+                                <span class="t-val">WhereTheISS.at</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Layers & Overlays Tab View -->
+                <section id="tab-layers" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">BASE MAP STYLES</label>
+                        <div class="layer-selector-list" id="layer-style-options">
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="streets">
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Standard Street Map</span>
+                                    <span class="l-sub">CartoDB Voyager / OSM Road Network</span>
+                                </div>
+                            </label>
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="dark" checked>
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Futuristic Dark HUD</span>
+                                    <span class="l-sub">CartoDB Dark Matter (High Contrast)</span>
+                                </div>
+                            </label>
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="light">
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Light Minimal Carto</span>
+                                    <span class="l-sub">CartoDB Positron High Legibility</span>
+                                </div>
+                            </label>
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="satellite">
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Satellite Imagery</span>
+                                    <span class="l-sub">ESRI World Imagery Global Photogrammetry</span>
+                                </div>
+                            </label>
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="satellite_labels">
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Satellite with Labels</span>
+                                    <span class="l-sub">ESRI Imagery + Boundaries and Highways</span>
+                                </div>
+                            </label>
+                            <label class="layer-radio">
+                                <input type="radio" name="base-layer" value="topo">
+                                <span class="radio-custom"></span>
+                                <div class="layer-text">
+                                    <span class="l-title">Topographic & Contours</span>
+                                    <span class="l-sub">OpenTopoMap Elevation Contours</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">GEOGRAPHIC OVERLAYS</label>
+                        <div class="overlay-toggles">
+                            <label class="switch-row">
+                                <span class="sub-label">Day / Night Terminator</span>
+                                <input type="checkbox" id="overlay-terminator" checked>
+                            </label>
+                            <label class="switch-row">
+                                <span class="sub-label">USGS Live Earthquakes (M2.5+)</span>
+                                <input type="checkbox" id="overlay-earthquakes" checked>
+                            </label>
+                            <label class="switch-row">
+                                <span class="sub-label">Atmospheric Glow (Globe Mode)</span>
+                                <input type="checkbox" id="overlay-atmosphere" checked>
+                            </label>
+                            <label class="switch-row">
+                                <span class="sub-label">Coordinate Graticule (Lat/Lon)</span>
+                                <input type="checkbox" id="overlay-graticule">
+                            </label>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Saved Locations Tab View -->
+                <section id="tab-saved" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">BOOKMARKED PLACES</label>
+                        <ul id="saved-places-list" class="cards-list">
+                            <div class="empty-hint">No saved bookmarks yet. Click ⭐ Save Place on any location card.</div>
+                        </ul>
+                    </div>
+                </section>
+
+                <!-- Settings Tab View -->
+                <section id="tab-settings" class="tab-pane">
+                    <div class="section-block">
+                        <label class="section-label">ROUTING ENGINE</label>
+                        <select id="cfg-routing-provider" class="full-select">
+                            <option value="osrm">OSRM Public Router (Free)</option>
+                            <option value="openrouteservice">OpenRouteService (API Key)</option>
+                            <option value="graphhopper">GraphHopper (API Key)</option>
+                        </select>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">MEASUREMENT UNITS</label>
+                        <select id="cfg-units" class="full-select">
+                            <option value="metric">Metric (km, meters, °C)</option>
+                            <option value="imperial">Imperial (miles, feet, °F)</option>
+                        </select>
+                    </div>
+
+                    <div class="section-block">
+                        <div class="switch-row">
+                            <label class="section-label" style="margin:0;">LOW GPU PERFORMANCE MODE</label>
+                            <input type="checkbox" id="cfg-low-perf">
+                        </div>
+                        <p class="section-desc">Optimizes for integrated and entry-level graphics hardware by disabling heavy atmospheric effects and throttling high-frequency re-renders.</p>
+                    </div>
+
+                    <div class="section-block">
+                        <label class="section-label">SYSTEM DIAGNOSTICS</label>
+                        <div class="telemetry-box">
+                            <div class="telemetry-row">
+                                <span class="t-key">Server:</span>
+                                <span class="t-val" id="diag-server-status">127.0.0.1 (Loopback)</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Engine:</span>
+                                <span class="t-val">MapLibre GL JS v4.7.1</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Projections:</span>
+                                <span class="t-val">Mercator 2D / Spherical 3D</span>
+                            </div>
+                            <div class="telemetry-row">
+                                <span class="t-key">Event Channel:</span>
+                                <span class="t-val" id="diag-sse-status">Connecting...</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </aside>
+
+        <!-- Center Interactive Map Container -->
+        <main id="map-container">
+            <div id="map"></div>
+
+            <!-- On-Map Floating Toolbars -->
+            <div id="map-floating-controls">
+                <button id="ctrl-compass" class="map-ctrl-btn" title="Reset North">
+                    <span id="compass-needle">▲</span>
+                </button>
+                <button id="ctrl-zoom-in" class="map-ctrl-btn" title="Zoom In">+</button>
+                <button id="ctrl-zoom-out" class="map-ctrl-btn" title="Zoom Out">−</button>
+                <button id="ctrl-pitch-toggle" class="map-ctrl-btn" title="Tilt / Perspective (3D Pitch)">3D</button>
+                <button id="ctrl-measure-dist" class="map-ctrl-btn" title="Measure Distance Tool">📏</button>
+                <button id="ctrl-measure-area" class="map-ctrl-btn" title="Measure Area Tool">📐</button>
+            </div>
+
+            <!-- Active Measurement Readout Banner -->
+            <div id="measure-banner" class="measure-banner hidden">
+                <span id="measure-text">Click on the map to place measurement points.</span>
+                <button id="measure-clear-btn" class="btn-tiny">Clear</button>
+            </div>
+        </main>
+
+        <!-- Right Side Context Details Panel -->
+        <aside id="info-panel" class="info-panel-collapsed">
+            <div class="info-header">
+                <h4 id="info-panel-title">GEOGRAPHIC INTELLIGENCE</h4>
+                <button id="info-panel-close-btn" class="icon-btn">×</button>
+            </div>
+            <div id="info-panel-body" class="info-body">
+                <div class="empty-hint">Select a marker, aircraft, or place on the map to inspect live intelligence.</div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Bottom Status & Telemetry Bar -->
+    <footer id="bottom-bar">
+        <div class="status-group">
+            <div class="status-indicator online" id="connection-indicator"></div>
+            <span class="status-label" id="connection-label">JARVIS LINK: CONNECTED</span>
+        </div>
+
+        <div class="coords-display" id="coords-display" title="Click to copy coordinates to clipboard">
+            <span class="coord-label">LAT/LON:</span>
+            <span id="coord-dec" class="coord-val">12.30814° N, 75.10632° E</span>
+            <span class="coord-sep">|</span>
+            <span class="coord-label">DMS:</span>
+            <span id="coord-dms" class="coord-val">12° 18' 29" N, 75° 06' 22" E</span>
+        </div>
+
+        <div class="hud-telemetry">
+            <span class="hud-item">ZOOM: <span id="hud-zoom">12.0</span></span>
+            <span class="hud-item">PITCH: <span id="hud-pitch">0°</span></span>
+            <span class="hud-item" id="weather-quick-badge">WEATHER: 25.8°C Overcast</span>
+        </div>
+
+        <div class="attribution">
+            <span>© MapLibre | © OpenStreetMap contributors | WhereTheISS | OpenSky Network</span>
+        </div>
+    </footer>
+
+    <!-- Core Scripts -->
+    <script src="vendor/maplibre-gl.js" onerror="this.onerror=null;this.src='https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';"></script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
